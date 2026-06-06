@@ -325,10 +325,6 @@
             <el-slider v-model="fontSize" :min="14" :max="32" :step="2" />
           </div>
           <div class="setting-group">
-            <label>浮动字幕</label>
-            <el-switch v-model="showFloatingSubtitles" />
-          </div>
-          <div class="setting-group">
             <label>独立字幕</label>
             <button class="mini-action-btn" @click="toggleIndependentSubtitleWindow">
               {{ independentSubtitleWindowOpen ? '关闭窗口' : '打开窗口' }}
@@ -344,10 +340,6 @@
       </div>
     </div>
 
-    <div v-if="showFloatingSubtitles && latestFloatingSubtitle" class="floating-subtitle" :class="{ partial: latestFloatingSubtitle.isPartial }">
-      <div class="floating-original" v-if="latestFloatingSubtitle.original">{{ latestFloatingSubtitle.original }}</div>
-      <div class="floating-translated">{{ latestFloatingSubtitle.translated }}</div>
-    </div>
   </div>
 </template>
 
@@ -368,7 +360,6 @@ const subtitleContainer = ref(null)
 const waveformCanvas = ref(null)
 const fileInput = ref(null)
 const showSettings = ref(false)
-const showFloatingSubtitles = ref(false)
 const independentSubtitleWindowOpen = ref(false)
 const fontSize = ref(20)
 const subtitleCount = ref(0)
@@ -765,7 +756,7 @@ async function startCapture() {
     analyser.fftSize = 2048
     source.connect(analyser)
 
-    const bufferSize = Math.floor(16000 * 0.1)
+    const bufferSize = Math.floor(16000 * 0.08)
     let buffer = []
     let isSpeaking = false
     let silenceTimeout = null
@@ -1001,7 +992,7 @@ async function startRecording() {
   try {
     await connectWS()
     wavRecorder = new WavRecorder(16000, {
-      bufferDuration: 0.1,
+      bufferDuration: 0.08,
       continuous: true,
       energyThreshold: 0.065,
       maxSilenceMs: 450,
@@ -1784,51 +1775,6 @@ body {
 
 .settings-drawer { position: fixed; inset: 0; z-index: 100; pointer-events: none; }
 .settings-drawer.open { pointer-events: all; }
-
-.floating-subtitle {
-  position: fixed;
-  left: 50%;
-  bottom: 96px;
-  transform: translateX(-50%);
-  z-index: 80;
-  width: min(900px, calc(100vw - 48px));
-  padding: 14px 20px;
-  border-radius: 10px;
-  background: rgba(5, 8, 20, 0.78);
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  color: var(--text-primary);
-  text-align: center;
-  backdrop-filter: blur(16px);
-  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.35);
-  pointer-events: none;
-  overflow: hidden;
-}
-
-.floating-subtitle.partial {
-  opacity: 0.92;
-}
-
-.floating-original {
-  margin-bottom: 6px;
-  color: rgba(241, 245, 249, 0.82);
-  font-size: 15px;
-  line-height: 1.45;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.floating-translated {
-  color: var(--success);
-  font-size: 22px;
-  font-weight: 700;
-  line-height: 1.35;
-  display: -webkit-box;
-  max-height: 60px;
-  overflow: hidden;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-}
 
 .drawer-overlay { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.5); opacity: 0; transition: opacity 0.3s; }
 .settings-drawer.open .drawer-overlay { opacity: 1; }

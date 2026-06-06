@@ -1,106 +1,100 @@
-# AI 同声传译助手
+# AI Interpreter
 
-基于小米AI API的实时同声传译系统，支持多语言实时翻译、文件导入、URL链接翻译、浏览器音频捕获等功能。
+实时语音翻译测试版。当前主路径使用阿里云百炼 DashScope 的 Qwen3.5 LiveTranslate 实时同传模型，支持麦克风和桌面音频输入，并提供独立字幕窗口。
 
-## 功能特性
+## 当前能力
 
-- **实时语音翻译**: 麦克风录音实时翻译
-- **文件导入翻译**: 支持音频/视频文件导入翻译
-- **URL链接翻译**: 输入音频/视频链接直接翻译
-- **浏览器音频捕获**: 捕获浏览器标签页音频进行翻译
-- **多语言支持**: EN/ZH/JA/KO/FR/DE
-- **智能纠错**: 上下文感知的翻译修正
-- **双语字幕**: 实时双语字幕显示
-- **字幕导出**: CSV格式导出翻译记录
+- 麦克风实时语音翻译
+- 桌面音频捕获，用于识别浏览器视频、会议或系统播放声音
+- 源语言、目标语言、输入源下拉切换
+- 独立字幕窗口，支持在应用页面外显示字幕
+- 文件和 URL 翻译入口保留
+- CSV 字幕导出
+
+## 技术栈
+
+- Frontend: Vue 3, Vite, Element Plus, WebSocket
+- Backend: FastAPI, WebSocket, websockets
+- Realtime model: `qwen3.5-livetranslate-flash-realtime-2026-05-19`
+- ASR model: `qwen3-asr-flash-realtime`
 
 ## 项目结构
 
-```
+```text
 ai-interpreter/
-├── frontend/              # Vue3前端
-│   └── src/
-│       ├── App.vue        # 主界面
-│       └── main.js        # 入口
-├── backend/               # FastAPI后端
-│   ├── api/
-│   │   └── websocket.py   # API路由
-│   ├── services/
-│   │   ├── xiaomi_api.py       # 小米API客户端
-│   │   ├── asr_service.py      # 语音识别
-│   │   ├── translate_service.py # 翻译服务
-│   │   └── correction_service.py # 纠错服务
-│   ├── main.py            # 主程序
-│   └── config.py          # 配置
-├── 启动.bat               # 启动脚本
-└── 打包.bat               # 打包脚本
+  backend/
+    api/
+      websocket.py
+    services/
+      aliyun_livetranslate_service.py
+      asr_service.py
+      translate_service.py
+      correction_service.py
+    config.py
+    main.py
+    requirements.txt
+    .env.example
+  frontend/
+    src/
+      App.vue
+      main.js
+      utils/audioUtils.js
+    package.json
 ```
 
-## 快速开始
+## 环境配置
 
-### 1. 配置API
+复制示例文件并填写自己的密钥：
 
-编辑 `backend/.env` 文件：
+```powershell
+Copy-Item backend\.env.example backend\.env
+```
+
+最小配置：
 
 ```env
-XIAOMI_API_KEY=your_api_key_here
-XIAOMI_API_BASE=https://token-plan-cn.xiaomimimo.com/v1
-XIAOMI_API_ENDPOINT=tp-cssf9gh45m7axddhvpj2j5rnfyo3uaf63g0jmqfpzja3crsm
+TRANSLATION_PROVIDER=aliyun_livetranslate
+DASHSCOPE_API_KEY=your_dashscope_api_key_here
+DASHSCOPE_LIVETRANSLATE_MODEL=qwen3.5-livetranslate-flash-realtime-2026-05-19
+DASHSCOPE_ASR_MODEL=qwen3-asr-flash-realtime
 ```
 
-### 2. 启动服务
+不要提交真实 `.env` 或 API Key。
 
-双击 `启动.bat` 或手动启动：
+## 本地启动
 
-```bash
-# 后端
+后端：
+
+```powershell
 cd backend
+pip install -r requirements.txt
 python main.py
+```
 
-# 前端
+前端：
+
+```powershell
 cd frontend
 npm install
 npm run dev
 ```
 
-### 3. 访问
+默认地址：
 
-- 前端: http://localhost:3001
-- 后端: http://localhost:9000
-- API文档: http://localhost:9000/docs
+- Frontend: http://127.0.0.1:3001
+- Backend: http://127.0.0.1:9000
+- API docs: http://127.0.0.1:9000/docs
 
 ## 使用说明
 
-### 麦克风录音
-1. 点击"麦克风"标签
-2. 点击录音按钮开始
-3. 说话后自动识别翻译
+1. 打开前端页面。
+2. 在底部选择 Source、Target 和 Input。
+3. Input 选择 `麦克风` 时，点击底部录音按钮开始麦克风识别。
+4. Input 选择 `桌面音频` 时，点击开始后在浏览器共享窗口中选择标签页或屏幕，并勾选共享音频。
+5. 在设置中点击 `独立字幕` 打开独立字幕窗口。
 
-### 文件导入
-1. 点击"文件"标签
-2. 拖放或点击选择音频/视频文件
-3. 等待处理完成
+## 当前测试版说明
 
-### URL链接
-1. 点击"链接"标签
-2. 输入音频/视频URL
-3. 点击"翻译"按钮
-
-### 浏览器捕获
-1. 点击"浏览器"标签
-2. 点击"开始捕获"
-3. 选择要捕获的标签页
-4. 播放音频自动翻译
-
-## 小米API模型
-
-| 模型 | 用途 |
-|------|------|
-| mimo-v2.5-asr | 语音识别 |
-| mimo-v2.5 | 语言模型/翻译 |
-| mimo-v2.5-tts | 语音合成 |
-
-## 技术栈
-
-- 前端: Vue 3 + Element Plus + WebSocket
-- 后端: FastAPI + WebSocket + httpx
-- AI: 小米AI API
+- 这是实时同传测试版本，重点验证 Qwen3.5 LiveTranslate 的端到端识别和翻译体验。
+- 音频分片已调到较低延迟，后端 VAD 也做了更快的句尾判定。
+- 过短停顿可能被切成两句；如果后续需要更稳定长句，可适当增加 VAD 静音等待时间。

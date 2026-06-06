@@ -18,6 +18,13 @@ class Settings(BaseSettings):
     XIAOMI_LLM_MODEL: str = "mimo-v2.5"
     XIAOMI_TTS_MODEL: str = "mimo-v2.5-tts"
 
+    TRANSLATION_PROVIDER: str = "xiaomi"
+
+    DASHSCOPE_API_KEY: str = ""
+    DASHSCOPE_REALTIME_URL: str = "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
+    DASHSCOPE_LIVETRANSLATE_MODEL: str = "qwen3.5-livetranslate-flash-realtime-2026-05-19"
+    DASHSCOPE_ASR_MODEL: str = "qwen3-asr-flash-realtime"
+
     SOURCE_LANG: str = "en"
     TARGET_LANG: str = "zh"
 

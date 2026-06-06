@@ -1,5 +1,5 @@
 <template>
-  <div class="app" :class="{ 'is-recording': isRecording }">
+  <div class="app" :class="{ 'is-recording': isRecording || isCapturing }">
     <div class="background-effects">
       <div class="gradient-orb orb-1"></div>
       <div class="gradient-orb orb-2"></div>
@@ -146,7 +146,7 @@
         </div>
       </div>
 
-      <div v-if="activeTab === 'browser'" class="browser-area">
+      <div v-if="activeTab === 'desktop'" class="browser-area">
         <div class="browser-controls">
           <div class="browser-info">
             <div class="browser-icon">
@@ -164,7 +164,7 @@
           <button 
             class="capture-btn" 
             :class="{ active: isCapturing }"
-            @click="toggleCapture"
+            @click="toggleRecording"
           >
             {{ isCapturing ? '停止捕获' : '开始捕获' }}
           </button>
@@ -230,29 +230,47 @@
     <footer class="app-footer">
       <div class="footer-left">
         <div class="lang-switcher">
-          <button class="lang-btn source" @click="cycleLang('source')">
-            {{ settings.sourceLang }}
-          </button>
+          <label class="select-field">
+            <span>Source</span>
+            <select v-model="settings.sourceLang" class="footer-select">
+              <option v-for="lang in sourceLanguageOptions" :key="lang.value" :value="lang.value">
+                {{ lang.label }}
+              </option>
+            </select>
+          </label>
           <button class="swap-btn" @click="swapLangs" title="交换语言">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M7 16l-4-4m0 0l4-4m-4 4h18M17 8l4 4m0 0l-4 4m4-4H3"/>
             </svg>
           </button>
-          <button class="lang-btn target" @click="cycleLang('target')">
-            {{ settings.targetLang }}
-          </button>
+          <label class="select-field">
+            <span>Target</span>
+            <select v-model="settings.targetLang" class="footer-select">
+              <option v-for="lang in targetLanguageOptions" :key="lang.value" :value="lang.value">
+                {{ lang.label }}
+              </option>
+            </select>
+          </label>
+          <label class="select-field input-select-field">
+            <span>Input</span>
+            <select v-model="activeTab" class="footer-select" @change="handleInputModeChange">
+              <option v-for="tab in captureTabs" :key="tab.id" :value="tab.id">
+                {{ tab.label }}
+              </option>
+            </select>
+          </label>
         </div>
       </div>
 
       <div class="footer-center">
         <button 
           class="record-btn" 
-          :class="{ recording: isRecording }"
+          :class="{ recording: isRecording || isCapturing }"
           @click="toggleRecording"
         >
           <div class="btn-inner">
             <div class="btn-icon">
-              <svg v-if="!isRecording" viewBox="0 0 24 24" fill="currentColor">
+              <svg v-if="!isRecording && !isCapturing" viewBox="0 0 24 24" fill="currentColor">
                 <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
                 <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
               </svg>
@@ -261,9 +279,9 @@
               </svg>
             </div>
           </div>
-          <div class="btn-ripple" v-if="isRecording"></div>
+          <div class="btn-ripple" v-if="isRecording || isCapturing"></div>
         </button>
-        <div class="record-label">{{ isRecording ? '停止录音' : '开始录音' }}</div>
+        <div class="record-label">{{ isRecording || isCapturing ? '停止' : activeTab === 'desktop' ? '开始桌面音频' : '开始录音' }}</div>
       </div>
 
       <div class="footer-right">
@@ -307,6 +325,10 @@
             <el-slider v-model="fontSize" :min="14" :max="32" :step="2" />
           </div>
           <div class="setting-group">
+            <label>浮动字幕</label>
+            <el-switch v-model="showFloatingSubtitles" />
+          </div>
+          <div class="setting-group">
             <label>API状态</label>
             <span class="api-status" :class="{ connected: apiConnected }">
               {{ apiConnected ? '已连接' : '未配置' }}
@@ -315,12 +337,18 @@
         </div>
       </div>
     </div>
+
+    <div v-if="showFloatingSubtitles && latestFloatingSubtitle" class="floating-subtitle" :class="{ partial: latestFloatingSubtitle.isPartial }">
+      <div class="floating-original" v-if="latestFloatingSubtitle.original">{{ latestFloatingSubtitle.original }}</div>
+      <div class="floating-translated">{{ latestFloatingSubtitle.translated }}</div>
+    </div>
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { ElMessage } from 'element-plus'
+import { WavRecorder, encodeWAV } from './utils/audioUtils.js'
 
 const isRecording = ref(false)
 const isCapturing = ref(false)
@@ -334,6 +362,7 @@ const subtitleContainer = ref(null)
 const waveformCanvas = ref(null)
 const fileInput = ref(null)
 const showSettings = ref(false)
+const showFloatingSubtitles = ref(false)
 const fontSize = ref(20)
 const subtitleCount = ref(0)
 const activeTab = ref('mic')
@@ -350,26 +379,103 @@ const settings = reactive({
 
 const tabs = [
   { id: 'mic', icon: '🎙️', label: '麦克风' },
+  { id: 'desktop', icon: '🖥️', label: '桌面音频' },
   { id: 'file', icon: '📁', label: '文件' },
-  { id: 'url', icon: '🔗', label: '链接' },
-  { id: 'browser', icon: '🌐', label: '浏览器' }
+  { id: 'url', icon: '🔗', label: '链接' }
 ]
 
-const langOptions = ['EN', 'ZH', 'JA', 'KO', 'FR', 'DE']
+const langOptions = ['AUTO', 'EN', 'ZH', 'JA', 'KO', 'FR', 'DE']
+const languageLabels = {
+  AUTO: '自动',
+  EN: '英语',
+  ZH: '中文',
+  JA: '日语',
+  KO: '韩语',
+  FR: '法语',
+  DE: '德语'
+}
+const sourceLanguageOptions = langOptions.map(value => ({ value, label: languageLabels[value] }))
+const targetLanguageOptions = langOptions
+  .filter(value => value !== 'AUTO')
+  .map(value => ({ value, label: languageLabels[value] }))
+const captureTabs = tabs.filter(tab => tab.id === 'mic' || tab.id === 'desktop')
 
 let ws = null
 let audioContext = null
 let analyser = null
 let mediaStream = null
 let mediaRecorder = null
+let wavRecorder = null
 let animationId = null
 let subtitleIdCounter = 0
 let captureStream = null
+let pendingAudioBlob = null
+
+const latestSubtitle = computed(() => {
+  for (let i = subtitles.value.length - 1; i >= 0; i--) {
+    if (subtitles.value[i]?.translated) return subtitles.value[i]
+  }
+  return null
+})
+
+const latestFloatingSubtitle = computed(() => {
+  const subtitle = latestSubtitle.value
+  if (!subtitle) return null
+  return {
+    ...subtitle,
+    original: formatFloatingText(subtitle.original, subtitle.isPartial ? 90 : 140),
+    translated: formatFloatingText(subtitle.translated, subtitle.isPartial ? 120 : 180)
+  }
+})
 
 function formatTime(timestamp) {
   if (!timestamp) return ''
   const d = new Date(timestamp)
   return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+}
+
+function collapseRepeatedText(text = '') {
+  let result = String(text).replace(/\s+/g, ' ').trim()
+  if (!result) return ''
+
+  for (let size = 6; size <= 80; size++) {
+    let i = 0
+    let changed = false
+    while (i + size * 2 <= result.length) {
+      const chunk = result.slice(i, i + size)
+      let end = i + size
+      while (result.slice(end, end + size) === chunk) {
+        end += size
+      }
+      if (end > i + size) {
+        result = result.slice(0, i + size) + result.slice(end)
+        changed = true
+      }
+      i += 1
+    }
+    if (changed) size = 5
+  }
+
+  return result
+}
+
+function formatFloatingText(text = '', maxChars = 140) {
+  const collapsed = collapseRepeatedText(text)
+  if (collapsed.length <= maxChars) return collapsed
+
+  const tail = collapsed.slice(-maxChars)
+  const breakAt = Math.max(
+    tail.indexOf('，'),
+    tail.indexOf('。'),
+    tail.indexOf(','),
+    tail.indexOf('.'),
+    tail.indexOf(' ')
+  )
+
+  if (breakAt > 8 && breakAt < tail.length - 12) {
+    return tail.slice(breakAt + 1).trim()
+  }
+  return tail.trim()
 }
 
 function cycleLang(type) {
@@ -378,9 +484,37 @@ function cycleLang(type) {
 }
 
 function swapLangs() {
+  if (settings.sourceLang === 'AUTO') return
   const temp = settings.sourceLang
   settings.sourceLang = settings.targetLang
   settings.targetLang = temp
+}
+
+function handleInputModeChange() {
+  if (isRecording.value) stopRecording()
+  if (isCapturing.value) stopCapture()
+}
+
+function sendSettings() {
+  if (ws?.readyState !== WebSocket.OPEN) return
+  ws.send(JSON.stringify({
+    type: 'settings',
+    data: {
+      source_lang: settings.sourceLang.toLowerCase(),
+      target_lang: settings.targetLang.toLowerCase(),
+      enable_correction: settings.enableCorrection,
+      enable_tts: settings.enableTTS
+    }
+  }))
+}
+
+function sendAudioBlob(wavBlob) {
+  if (ws?.readyState === WebSocket.OPEN) {
+    ws.send(wavBlob)
+    pendingAudioBlob = null
+    return
+  }
+  pendingAudioBlob = wavBlob
 }
 
 function triggerFileInput() {
@@ -478,39 +612,101 @@ async function toggleCapture() {
 
 async function startCapture() {
   try {
+    await connectWS()
     captureStream = await navigator.mediaDevices.getDisplayMedia({
-      video: false,
+      video: true,
       audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false,
         sampleRate: 16000
       }
     })
 
-    audioContext = new (window.AudioContext || window.webkitAudioContext)()
-    const source = audioContext.createMediaStreamSource(captureStream)
-    analyser = audioContext.createAnalyser()
+    if (captureStream.getAudioTracks().length === 0) {
+      captureStream.getTracks().forEach(t => t.stop())
+      captureStream = null
+      ElMessage.warning('没有捕获到桌面音频，请在共享窗口里勾选共享音频')
+      return
+    }
+
+    const captureAudioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 })
+    const source = captureAudioContext.createMediaStreamSource(captureStream)
+    analyser = captureAudioContext.createAnalyser()
     analyser.fftSize = 2048
     source.connect(analyser)
 
-    mediaRecorder = new MediaRecorder(captureStream, {
-      mimeType: 'audio/webm;codecs=opus'
-    })
+    const bufferSize = Math.floor(16000 * 0.1)
+    let buffer = []
+    let isSpeaking = false
+    let silenceTimeout = null
+    let voiceFrameCount = 0
+    const energyThreshold = 0.065
+    const maxSilenceMs = 450
+    const minVoiceFrames = 5
 
-    mediaRecorder.ondataavailable = (e) => {
-      if (e.data.size > 0 && ws?.readyState === WebSocket.OPEN) {
-        ws.send(e.data)
+    const processor = captureAudioContext.createScriptProcessor(4096, 1, 1)
+    source.connect(processor)
+    processor.connect(captureAudioContext.destination)
+
+    processor.onaudioprocess = (e) => {
+      const inputData = e.inputBuffer.getChannelData(0)
+      buffer.push(...inputData)
+      while (buffer.length >= bufferSize) {
+        const chunk = buffer.splice(0, bufferSize)
+        const wavBlob = encodeWAV(new Float32Array(chunk), 16000)
+        sendAudioBlob(wavBlob)
+      }
+      return
+
+      let sum = 0
+      for (let i = 0; i < inputData.length; i++) sum += inputData[i] * inputData[i]
+      const rms = Math.sqrt(sum / inputData.length)
+      const hasVoice = rms > energyThreshold
+
+      if (hasVoice) {
+        voiceFrameCount++
+        if (voiceFrameCount >= minVoiceFrames) {
+          isSpeaking = true
+          if (silenceTimeout) { clearTimeout(silenceTimeout); silenceTimeout = null }
+        }
+        if (isSpeaking) buffer.push(...inputData)
+      } else {
+        voiceFrameCount = 0
+        if (isSpeaking) {
+          buffer.push(...inputData)
+          if (!silenceTimeout) {
+            silenceTimeout = setTimeout(() => {
+              isSpeaking = false
+              silenceTimeout = null
+              voiceFrameCount = 0
+              if (buffer.length > 0) {
+                const wavBlob = encodeWAV(new Float32Array(buffer), 16000)
+                buffer = []
+                sendAudioBlob(wavBlob)
+              }
+            }, maxSilenceMs)
+          }
+        }
+      }
+
+      if (buffer.length >= bufferSize && isSpeaking) {
+        const chunk = buffer.splice(0, bufferSize)
+        const wavBlob = encodeWAV(new Float32Array(chunk), 16000)
+        sendAudioBlob(wavBlob)
       }
     }
 
-    mediaRecorder.start(500)
+    mediaRecorder = { stop: () => { if (silenceTimeout) clearTimeout(silenceTimeout); processor.disconnect(); captureAudioContext.close() } }
+
     isCapturing.value = true
-    connectWS()
     drawWaveform()
 
-    captureStream.getAudioTracks()[0].onended = () => {
-      stopCapture()
-    }
+    captureStream.getTracks().forEach(track => {
+      track.onended = () => {
+        if (isCapturing.value) stopCapture()
+      }
+    })
 
   } catch (err) {
     ElMessage.error('无法捕获音频: ' + err.message)
@@ -532,6 +728,11 @@ function stopCapture() {
     audioContext.close()
   }
 
+  if (ws) {
+    ws.close()
+    ws = null
+  }
+
   captureStream = null
   mediaRecorder = null
   audioContext = null
@@ -541,20 +742,48 @@ function stopCapture() {
 function toggleRecording() {
   if (isRecording.value) {
     stopRecording()
+  } else if (isCapturing.value) {
+    stopCapture()
+  } else if (activeTab.value === 'desktop') {
+    startCapture()
   } else {
     startRecording()
   }
 }
 
 function connectWS() {
-  if (ws?.readyState === WebSocket.OPEN) return
+  if (ws?.readyState === WebSocket.OPEN) {
+    sendSettings()
+    return Promise.resolve()
+  }
+  if (ws?.readyState === WebSocket.CONNECTING) {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('WebSocket连接超时')), 5000)
+      ws.addEventListener('open', () => { clearTimeout(timer); resolve() }, { once: true })
+      ws.addEventListener('error', () => { clearTimeout(timer); reject(new Error('WebSocket连接失败')) }, { once: true })
+    })
+  }
 
   const wsUrl = `ws://${window.location.hostname}:9000/ws/translate`
   ws = new WebSocket(wsUrl)
 
-  ws.onopen = () => {
-    wsStatus.value = 'connected'
-  }
+  const openPromise = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('WebSocket连接超时')), 5000)
+
+    ws.onopen = () => {
+      clearTimeout(timer)
+      wsStatus.value = 'connected'
+      sendSettings()
+      if (pendingAudioBlob) sendAudioBlob(pendingAudioBlob)
+      resolve()
+    }
+
+    ws.onerror = () => {
+      clearTimeout(timer)
+      wsStatus.value = 'disconnected'
+      reject(new Error('WebSocket连接失败'))
+    }
+  })
 
   ws.onmessage = (e) => {
     const data = JSON.parse(e.data)
@@ -579,13 +808,15 @@ function connectWS() {
     }
   }
 
-  ws.onerror = () => {
-    wsStatus.value = 'disconnected'
-  }
+  return openPromise
 }
 
 function addSubtitle(type, content) {
-  const { original, translated, timestamp } = content
+  let { original, translated, timestamp } = content
+  if (type === 'partial') {
+    original = collapseRepeatedText(original)
+    translated = collapseRepeatedText(translated)
+  }
 
   if (type === 'partial') {
     const existing = subtitles.value.find(s => s.isPartial)
@@ -639,38 +870,46 @@ function applyCorrection(content) {
 
 async function startRecording() {
   try {
-    mediaStream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true, sampleRate: 16000 }
+    await connectWS()
+    wavRecorder = new WavRecorder(16000, {
+      bufferDuration: 0.1,
+      continuous: true,
+      energyThreshold: 0.065,
+      maxSilenceMs: 450,
+      minVoiceFrames: 5
+    })
+    await wavRecorder.start((wavBlob) => {
+      sendAudioBlob(wavBlob)
     })
 
-    audioContext = new (window.AudioContext || window.webkitAudioContext)()
-    const source = audioContext.createMediaStreamSource(mediaStream)
-    analyser = audioContext.createAnalyser()
-    analyser.fftSize = 2048
-    source.connect(analyser)
-
-    mediaRecorder = new MediaRecorder(mediaStream, { mimeType: 'audio/webm;codecs=opus' })
-    mediaRecorder.ondataavailable = (e) => {
-      if (e.data.size > 0 && ws?.readyState === WebSocket.OPEN) {
-        ws.send(e.data)
-      }
+    mediaStream = wavRecorder.stream
+    audioContext = wavRecorder.audioContext
+    if (audioContext) {
+      const source = audioContext.createMediaStreamSource(mediaStream)
+      analyser = audioContext.createAnalyser()
+      analyser.fftSize = 2048
+      source.connect(analyser)
     }
-    mediaRecorder.start(500)
 
     isRecording.value = true
-    connectWS()
     drawWaveform()
   } catch (err) {
-    ElMessage.error('无法访问麦克风')
+    ElMessage.error('无法访问麦克风: ' + err.message)
   }
 }
 
 function stopRecording() {
   isRecording.value = false
 
-  if (mediaRecorder?.state !== 'inactive') mediaRecorder?.stop()
-  mediaStream?.getTracks().forEach(t => t.stop())
-  if (audioContext) audioContext.close()
+  if (wavRecorder) {
+    wavRecorder.stop()
+    wavRecorder = null
+  }
+
+  if (ws) {
+    ws.close()
+    ws = null
+  }
 
   mediaRecorder = null
   mediaStream = null
@@ -763,6 +1002,17 @@ function clearSubtitles() {
   subtitles.value = []
   subtitleCount.value = 0
 }
+
+watch(
+  () => ({
+    sourceLang: settings.sourceLang,
+    targetLang: settings.targetLang,
+    enableCorrection: settings.enableCorrection,
+    enableTTS: settings.enableTTS
+  }),
+  sendSettings,
+  { deep: true }
+)
 
 onMounted(async () => {
   drawWaveform()
@@ -1244,7 +1494,54 @@ body {
 .footer-left, .footer-right { flex: 1; }
 .footer-right { display: flex; justify-content: flex-end; gap: 10px; }
 
-.lang-switcher { display: flex; align-items: center; gap: 10px; }
+.lang-switcher { display: flex; align-items: flex-end; gap: 10px; }
+
+.select-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 104px;
+}
+
+.select-field span {
+  padding-left: 2px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.footer-select {
+  width: 100%;
+  height: 38px;
+  padding: 0 34px 0 12px;
+  appearance: none;
+  background:
+    linear-gradient(45deg, transparent 50%, var(--text-secondary) 50%) calc(100% - 17px) 16px / 6px 6px no-repeat,
+    linear-gradient(135deg, var(--text-secondary) 50%, transparent 50%) calc(100% - 12px) 16px / 6px 6px no-repeat,
+    var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 700;
+  outline: none;
+  cursor: pointer;
+  transition: border-color 0.2s, background-color 0.2s;
+}
+
+.footer-select:hover,
+.footer-select:focus {
+  border-color: var(--primary);
+  background-color: var(--surface-hover);
+}
+
+.footer-select option {
+  color: #111827;
+  background: #ffffff;
+}
+
+.input-select-field { min-width: 122px; }
 
 .lang-btn {
   padding: 8px 16px;
@@ -1336,6 +1633,51 @@ body {
 
 .settings-drawer { position: fixed; inset: 0; z-index: 100; pointer-events: none; }
 .settings-drawer.open { pointer-events: all; }
+
+.floating-subtitle {
+  position: fixed;
+  left: 50%;
+  bottom: 96px;
+  transform: translateX(-50%);
+  z-index: 80;
+  width: min(900px, calc(100vw - 48px));
+  padding: 14px 20px;
+  border-radius: 10px;
+  background: rgba(5, 8, 20, 0.78);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: var(--text-primary);
+  text-align: center;
+  backdrop-filter: blur(16px);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.floating-subtitle.partial {
+  opacity: 0.92;
+}
+
+.floating-original {
+  margin-bottom: 6px;
+  color: rgba(241, 245, 249, 0.82);
+  font-size: 15px;
+  line-height: 1.45;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.floating-translated {
+  color: var(--success);
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1.35;
+  display: -webkit-box;
+  max-height: 60px;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
 
 .drawer-overlay { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.5); opacity: 0; transition: opacity 0.3s; }
 .settings-drawer.open .drawer-overlay { opacity: 1; }

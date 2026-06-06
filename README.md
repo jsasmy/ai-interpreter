@@ -13,6 +13,7 @@
 ## 技术栈
 
 - Frontend: Vue 3, Vite, Element Plus, WebSocket
+- Desktop shell: Electron
 - Backend: FastAPI, WebSocket, websockets
 - Realtime model: `qwen3.5-livetranslate-flash-realtime-2026-05-19`
 - ASR model: `qwen3-asr-flash-realtime`
@@ -34,6 +35,8 @@ ai-interpreter/
     requirements.txt
     .env.example
   frontend/
+    electron/
+      main.cjs
     src/
       App.vue
       main.js
@@ -117,6 +120,31 @@ python launcher.py
 ```
 
 它会尝试启动后端和前端，并打开浏览器。这个启动器仍然是浏览器版本，不是桌面客户端。
+
+## Electron 桌面版启动
+
+桌面版入口位于 `frontend/electron/main.cjs`。它会自动启动：
+
+- FastAPI 后端：http://127.0.0.1:9000
+- Vite 前端：http://127.0.0.1:3001
+- Electron 应用窗口
+
+启动方式：
+
+```powershell
+cd frontend
+npm run desktop:dev
+```
+
+如果系统里的 `python` 不是项目要用的 Python，可以显式指定：
+
+```powershell
+$env:PYTHON_PATH="E:\anacodna\python.exe"
+cd frontend
+npm run desktop:dev
+```
+
+桌面版会拦截页面里的桌面音频捕获请求，在 Windows 上优先使用 Electron 的 system audio loopback。也就是说，Input 选择 `桌面音频` 后，采集路径会比普通浏览器版更接近桌面客户端。
 
 ## 使用说明
 

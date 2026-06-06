@@ -1,12 +1,9 @@
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, UploadFile, File, HTTPException
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.responses import StreamingResponse
 from typing import List, Dict, Optional
 import json
 import asyncio
 import logging
-import tempfile
-import os
-import httpx
 from time import perf_counter
 from datetime import datetime
 
@@ -83,93 +80,6 @@ class ConnectionManager:
 
 
 manager = ConnectionManager()
-
-
-@router.post("/api/upload")
-async def upload_file(file: UploadFile = File(...)):
-    if not file.filename:
-        raise HTTPException(400, "未选择文件")
-
-    allowed_extensions = ['.mp3', '.wav', '.m4a', '.ogg', '.webm', '.mp4', '.avi', '.mov']
-    ext = os.path.splitext(file.filename)[1].lower()
-    if ext not in allowed_extensions:
-        raise HTTPException(400, f"不支持的文件格式: {ext}")
-
-    try:
-        content = await file.read()
-
-        with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
-            tmp.write(content)
-            tmp_path = tmp.name
-
-        asr_result = await asr_service.recognize(content, "en")
-
-        if "error" in asr_result:
-            raise HTTPException(500, asr_result["error"])
-
-        original_text = asr_result.get("text", "")
-        if not original_text:
-            raise HTTPException(400, "无法识别音频内容")
-
-        translate_result = await translate_service.translate(original_text, "en", "zh")
-
-        if "error" in translate_result:
-            raise HTTPException(500, translate_result["error"])
-
-        return {
-            "success": True,
-            "filename": file.filename,
-            "original": original_text,
-            "translated": translate_result.get("translated", ""),
-            "confidence": asr_result.get("confidence", 0),
-            "duration": len(content) / 16000
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"文件处理错误: {e}")
-        raise HTTPException(500, str(e))
-    finally:
-        if 'tmp_path' in locals():
-            try:
-                os.unlink(tmp_path)
-            except:
-                pass
-
-
-@router.post("/api/translate-url")
-async def translate_url(url: str):
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(url, timeout=30.0)
-            content_type = response.headers.get("content-type", "")
-
-            if "audio" in content_type or "video" in content_type:
-                audio_data = response.content
-                asr_result = await asr_service.recognize(audio_data, "en")
-
-                if "error" in asr_result:
-                    raise HTTPException(500, asr_result["error"])
-
-                original_text = asr_result.get("text", "")
-                translate_result = await translate_service.translate(original_text, "en", "zh")
-
-                return {
-                    "success": True,
-                    "url": url,
-                    "original": original_text,
-                    "translated": translate_result.get("translated", ""),
-                    "confidence": asr_result.get("confidence", 0)
-                }
-            else:
-                raise HTTPException(400, "URL不是音频或视频文件")
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"URL处理错误: {e}")
-        raise HTTPException(500, str(e))
 
 
 @router.post("/api/tts")
@@ -254,21 +164,38 @@ async def translate_websocket(websocket: WebSocket):
         async def send_to_client(message: dict):
             await websocket.send_json(message)
 
-        live_session = AliyunLiveTranslateSession(send_to_client)
-        ws_settings = manager.get_settings(websocket)
-        try:
+        async def start_live_session():
+            nonlocal live_session
+            if live_session:
+                await live_session.close()
+            live_session = AliyunLiveTranslateSession(send_to_client)
+            ws_settings = manager.get_settings(websocket)
             await live_session.connect(
                 ws_settings.get("source_lang", "auto"),
                 ws_settings.get("target_lang", "zh"),
             )
-        except Exception as e:
-            logger.error("阿里同传启动失败: %s", e)
-            await live_session.close()
-            live_session = None
-            await websocket.send_json({
-                "type": "error",
-                "content": {"message": f"阿里同传启动失败: {e}"}
-            })
+
+        async def ensure_live_session():
+            nonlocal live_session
+            if live_session:
+                return True
+            try:
+                await start_live_session()
+                return True
+            except Exception as e:
+                logger.error("阿里同传启动失败: %s", e)
+                if live_session:
+                    await live_session.close()
+                live_session = None
+                await websocket.send_json({
+                    "type": "error",
+                    "content": {"message": f"阿里同传启动失败: {e}"}
+                })
+                return False
+
+    else:
+        start_live_session = None
+        ensure_live_session = None
 
     try:
         while True:
@@ -276,12 +203,12 @@ async def translate_websocket(websocket: WebSocket):
 
             if data["type"] == "websocket.receive":
                 if "bytes" in data:
-                    if live_session:
+                    if ensure_live_session and await ensure_live_session():
                         await live_session.send_audio(data["bytes"])
-                    else:
+                    elif not ensure_live_session:
                         asyncio.create_task(handle_audio_data(websocket, data["bytes"]))
                 elif "text" in data:
-                    await handle_text_message(websocket, data["text"], live_session)
+                    await handle_text_message(websocket, data["text"], live_session, start_live_session)
 
     except WebSocketDisconnect:
         manager.disconnect(websocket)
@@ -390,19 +317,16 @@ async def _handle_audio_data(websocket: WebSocket, audio_data: bytes):
 async def handle_text_message(
     websocket: WebSocket,
     message: str,
-    live_session: AliyunLiveTranslateSession | None = None
+    live_session: AliyunLiveTranslateSession | None = None,
+    restart_live_session=None,
 ):
     try:
         data = json.loads(message)
 
         if data.get("type") == "settings":
             manager.update_settings(websocket, data.get("data", {}))
-            if live_session:
-                ws_settings = manager.get_settings(websocket)
-                await live_session.update_settings(
-                    ws_settings.get("source_lang", "auto"),
-                    ws_settings.get("target_lang", "zh"),
-                )
+            if restart_live_session:
+                await restart_live_session()
             await websocket.send_json({
                 "type": "settings_updated",
                 "content": {"status": "ok"}

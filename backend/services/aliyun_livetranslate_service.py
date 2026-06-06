@@ -30,6 +30,18 @@ LANGUAGE_MAP = {
     "ko": "ko",
     "fr": "fr",
     "de": "de",
+    "es": "es",
+    "pt": "pt",
+    "it": "it",
+    "ru": "ru",
+    "ar": "ar",
+    "yue": "yue",
+    "vi": "vi",
+    "th": "th",
+    "id": "id",
+    "hi": "hi",
+    "el": "el",
+    "tr": "tr",
 }
 
 
@@ -114,7 +126,6 @@ class AliyunLiveTranslateSession:
         if not pcm_data:
             return
 
-        debug_logger.info("send_audio bytes=%s pcm=%s", len(audio_data), len(pcm_data))
         event = {
             "event_id": f"event_{uuid.uuid4().hex}",
             "type": "input_audio_buffer.append",
@@ -155,9 +166,9 @@ class AliyunLiveTranslateSession:
                 },
                 "turn_detection": {
                     "type": "server_vad",
-                    "threshold": 0.18,
-                    "prefix_padding_ms": 220,
-                    "silence_duration_ms": 380,
+                    "threshold": 0.12,
+                    "prefix_padding_ms": 420,
+                    "silence_duration_ms": 520,
                 },
             },
         }
@@ -270,7 +281,9 @@ class AliyunLiveTranslateSession:
 
     async def _send_subtitle(self, message_type: str, item_id: str = ""):
         translated = self.latest_translated
-        original = self.original_by_item.get(item_id, self.latest_original)
+        original = self.original_by_item.get(item_id) or self.latest_original
+        if not original and self.original_by_item:
+            original = next(reversed(self.original_by_item.values()), "")
         if not translated:
             debug_logger.info(
                 "skip_subtitle type=%s item=%s original_len=%s translated_len=0",

@@ -8,7 +8,6 @@
 - 桌面音频捕获，用于识别浏览器视频、会议或系统播放声音
 - 源语言、目标语言、输入源下拉切换
 - 独立字幕窗口，支持在应用页面外显示字幕
-- 文件和 URL 翻译入口保留
 - CSV 字幕导出
 
 ## 技术栈
@@ -44,7 +43,7 @@ ai-interpreter/
 
 ## 环境配置
 
-复制示例文件并填写自己的密钥：
+先准备 Python、Node.js 和 npm，然后复制示例文件并填写自己的 DashScope 密钥：
 
 ```powershell
 Copy-Item backend\.env.example backend\.env
@@ -63,21 +62,45 @@ DASHSCOPE_ASR_MODEL=qwen3-asr-flash-realtime
 
 ## 本地启动
 
-后端：
+推荐使用两个 PowerShell 终端分别启动后端和前端。
+
+### 1. 安装依赖
+
+后端依赖：
 
 ```powershell
 cd backend
 pip install -r requirements.txt
-python main.py
 ```
 
-前端：
+前端依赖：
 
 ```powershell
 cd frontend
 npm install
+```
+
+### 2. 启动后端
+
+在项目根目录执行：
+
+```powershell
+cd backend
+python main.py
+```
+
+看到后端监听 `9000` 端口后保持该终端不要关闭。
+
+### 3. 启动前端
+
+另开一个 PowerShell，在项目根目录执行：
+
+```powershell
+cd frontend
 npm run dev
 ```
+
+然后打开前端地址。
 
 默认地址：
 
@@ -85,13 +108,26 @@ npm run dev
 - Backend: http://127.0.0.1:9000
 - API docs: http://127.0.0.1:9000/docs
 
+### 可选：使用启动器
+
+仓库根目录有一个简易启动器：
+
+```powershell
+python launcher.py
+```
+
+它会尝试启动后端和前端，并打开浏览器。这个启动器仍然是浏览器版本，不是桌面客户端。
+
 ## 使用说明
 
 1. 打开前端页面。
 2. 在底部选择 Source、Target 和 Input。
 3. Input 选择 `麦克风` 时，点击底部录音按钮开始麦克风识别。
 4. Input 选择 `桌面音频` 时，点击开始后在浏览器共享窗口中选择标签页或屏幕，并勾选共享音频。
-5. 在设置中点击 `独立字幕` 打开独立字幕窗口。
+5. 主页面右下角的 `字幕开/字幕关` 用于手动打开或关闭独立字幕窗口。
+6. 设置里的 `识别时自动打开字幕` 控制开始识别时是否自动弹出独立字幕窗口。
+
+当前版本暂时只保留麦克风和桌面音频实时识别，不包含文件上传或 URL 链接翻译入口。
 
 ## 当前测试版说明
 

@@ -61,91 +61,6 @@
         </button>
       </div>
 
-      <div v-if="activeTab === 'file'" class="upload-area">
-        <div 
-          class="dropzone" 
-          :class="{ dragover: isDragover, uploading: isUploading }"
-          @dragover.prevent="isDragover = true"
-          @dragleave="isDragover = false"
-          @drop.prevent="handleDrop"
-          @click="triggerFileInput"
-        >
-          <input 
-            ref="fileInput" 
-            type="file" 
-            accept="audio/*,video/*" 
-            @change="handleFileSelect" 
-            hidden
-          >
-          <div v-if="!isUploading" class="dropzone-content">
-            <div class="dropzone-icon">
-              <svg viewBox="0 0 48 48" fill="none">
-                <path d="M24 4L12 16h8v12h8V16h8L24 4z" fill="currentColor"/>
-                <path d="M8 36v4h32v-4H8z" fill="currentColor" opacity="0.5"/>
-              </svg>
-            </div>
-            <p class="dropzone-text">拖放音频/视频文件到此处</p>
-            <p class="dropzone-hint">支持 MP3, WAV, M4A, MP4, AVI 等格式</p>
-          </div>
-          <div v-else class="uploading-content">
-            <div class="upload-spinner"></div>
-            <p>正在处理...</p>
-          </div>
-        </div>
-
-        <div v-if="uploadResult" class="upload-result">
-          <div class="result-header">
-            <span class="result-icon">✅</span>
-            <span>翻译完成</span>
-          </div>
-          <div class="result-content">
-            <div class="result-item">
-              <label>原文</label>
-              <p>{{ uploadResult.original }}</p>
-            </div>
-            <div class="result-item">
-              <label>译文</label>
-              <p>{{ uploadResult.translated }}</p>
-            </div>
-            <div class="result-meta">
-              <span>文件: {{ uploadResult.filename }}</span>
-              <span>置信度: {{ (uploadResult.confidence * 100).toFixed(1) }}%</span>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div v-if="activeTab === 'url'" class="url-area">
-        <div class="url-input-group">
-          <input 
-            v-model="inputUrl" 
-            type="url" 
-            placeholder="输入音频/视频链接..."
-            class="url-input"
-            @keyup.enter="translateUrl"
-          >
-          <button class="url-btn" @click="translateUrl" :disabled="!inputUrl || isUrlLoading">
-            {{ isUrlLoading ? '处理中...' : '翻译' }}
-          </button>
-        </div>
-        <div v-if="urlResult" class="upload-result">
-          <div class="result-header">
-            <span class="result-icon">✅</span>
-            <span>翻译完成</span>
-          </div>
-          <div class="result-content">
-            <div class="result-item">
-              <label>原文</label>
-              <p>{{ urlResult.original }}</p>
-            </div>
-            <div class="result-item">
-              <label>译文</label>
-              <p>{{ urlResult.translated }}</p>
-            </div>
-          </div>
-        </div>
-      </div>
-
       <div v-if="activeTab === 'desktop'" class="browser-area">
         <div class="browser-controls">
           <div class="browser-info">
@@ -189,7 +104,7 @@
               </svg>
             </div>
             <p class="empty-text">选择输入方式开始翻译</p>
-            <p class="empty-hint">支持麦克风录音、文件导入、URL链接或浏览器音频捕获</p>
+            <p class="empty-hint">支持麦克风录音或桌面音频捕获</p>
           </div>
 
           <transition-group name="subtitle" tag="div" class="subtitle-list">
@@ -285,6 +200,17 @@
       </div>
 
       <div class="footer-right">
+        <button
+          class="action-btn subtitle-toggle-btn"
+          :class="{ active: independentSubtitleWindowOpen }"
+          @click="toggleIndependentSubtitleWindow"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M4 5h16a2 2 0 012 2v8a2 2 0 01-2 2H8l-4 4v-4H4a2 2 0 01-2-2V7a2 2 0 012-2z"/>
+            <path d="M7 9h10M7 13h6"/>
+          </svg>
+          <span>{{ independentSubtitleWindowOpen ? '字幕开' : '字幕关' }}</span>
+        </button>
         <button class="action-btn" @click="exportSubtitles" :disabled="subtitles.length === 0">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/>
@@ -325,10 +251,8 @@
             <el-slider v-model="fontSize" :min="14" :max="32" :step="2" />
           </div>
           <div class="setting-group">
-            <label>独立字幕</label>
-            <button class="mini-action-btn" @click="toggleIndependentSubtitleWindow">
-              {{ independentSubtitleWindowOpen ? '关闭窗口' : '打开窗口' }}
-            </button>
+            <label>识别时自动打开字幕</label>
+            <el-switch v-model="settings.autoOpenSubtitleWindow" />
           </div>
           <div class="setting-group">
             <label>API状态</label>
@@ -350,39 +274,31 @@ import { WavRecorder, encodeWAV } from './utils/audioUtils.js'
 
 const isRecording = ref(false)
 const isCapturing = ref(false)
-const isDragover = ref(false)
-const isUploading = ref(false)
-const isUrlLoading = ref(false)
 const wsStatus = ref('disconnected')
 const apiConnected = ref(false)
 const subtitles = ref([])
 const subtitleContainer = ref(null)
 const waveformCanvas = ref(null)
-const fileInput = ref(null)
 const showSettings = ref(false)
 const independentSubtitleWindowOpen = ref(false)
 const fontSize = ref(20)
 const subtitleCount = ref(0)
 const activeTab = ref('mic')
-const inputUrl = ref('')
-const uploadResult = ref(null)
-const urlResult = ref(null)
 
 const settings = reactive({
   sourceLang: 'EN',
   targetLang: 'ZH',
   enableCorrection: true,
-  enableTTS: false
+  enableTTS: false,
+  autoOpenSubtitleWindow: true
 })
 
 const tabs = [
   { id: 'mic', icon: '🎙️', label: '麦克风' },
-  { id: 'desktop', icon: '🖥️', label: '桌面音频' },
-  { id: 'file', icon: '📁', label: '文件' },
-  { id: 'url', icon: '🔗', label: '链接' }
+  { id: 'desktop', icon: '🖥️', label: '桌面音频' }
 ]
 
-const langOptions = ['AUTO', 'EN', 'ZH', 'JA', 'KO', 'FR', 'DE']
+const langOptions = ['AUTO', 'EN', 'ZH', 'JA', 'KO', 'FR', 'DE', 'ES', 'PT', 'IT', 'RU', 'AR', 'YUE', 'VI', 'TH', 'ID', 'HI', 'EL', 'TR']
 const languageLabels = {
   AUTO: '自动',
   EN: '英语',
@@ -390,7 +306,19 @@ const languageLabels = {
   JA: '日语',
   KO: '韩语',
   FR: '法语',
-  DE: '德语'
+  DE: '德语',
+  ES: '西班牙语',
+  PT: '葡萄牙语',
+  IT: '意大利语',
+  RU: '俄语',
+  AR: '阿拉伯语',
+  YUE: '粤语',
+  VI: '越南语',
+  TH: '泰语',
+  ID: '印尼语',
+  HI: '印地语',
+  EL: '希腊语',
+  TR: '土耳其语'
 }
 const sourceLanguageOptions = langOptions.map(value => ({ value, label: languageLabels[value] }))
 const targetLanguageOptions = langOptions
@@ -407,7 +335,10 @@ let wavRecorder = null
 let animationId = null
 let subtitleIdCounter = 0
 let captureStream = null
-let pendingAudioBlob = null
+const audioSendQueue = []
+const maxQueuedAudioChunks = 1200
+let isFlushingAudioQueue = false
+let pendingSettingsAck = null
 let independentSubtitleWindow = null
 
 const latestSubtitle = computed(() => {
@@ -415,16 +346,6 @@ const latestSubtitle = computed(() => {
     if (subtitles.value[i]?.translated) return subtitles.value[i]
   }
   return null
-})
-
-const latestFloatingSubtitle = computed(() => {
-  const subtitle = latestSubtitle.value
-  if (!subtitle) return null
-  return {
-    ...subtitle,
-    original: formatFloatingText(subtitle.original, subtitle.isPartial ? 90 : 140),
-    translated: formatFloatingText(subtitle.translated, subtitle.isPartial ? 120 : 180)
-  }
 })
 
 function formatTime(timestamp) {
@@ -526,47 +447,100 @@ async function toggleIndependentSubtitleWindow() {
           width: 100%;
           height: 100%;
           overflow: hidden;
-          background: rgba(5, 8, 20, 0.86);
+          background: transparent !important;
+          background-color: transparent !important;
           color: #f8fafc;
           font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
         }
         body {
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          padding: 18px 24px;
+          padding: 18px 24px 18px 18px;
+        }
+        #subtitle-close {
+          position: fixed;
+          top: 8px;
+          right: 8px;
+          z-index: 10;
+          width: 28px;
+          height: 28px;
+          border: 1px solid rgba(248, 250, 252, 0.24);
+          border-radius: 999px;
+          background: rgba(2, 6, 23, 0.28);
+          color: rgba(248, 250, 252, 0.88);
+          font-size: 18px;
+          line-height: 24px;
+          cursor: pointer;
+          backdrop-filter: blur(8px);
+        }
+        #subtitle-close:hover {
+          background: rgba(239, 68, 68, 0.72);
+          border-color: rgba(254, 202, 202, 0.7);
+          color: #fff;
         }
         #subtitle-root {
+          height: 100%;
+          overflow-y: auto;
+          padding: 24px 12px 0 0;
+          scroll-behavior: smooth;
+        }
+        #subtitle-root::-webkit-scrollbar {
+          width: 8px;
+        }
+        #subtitle-root::-webkit-scrollbar-thumb {
+          border-radius: 999px;
+          background: rgba(148, 163, 184, 0.45);
+        }
+        .subtitle-list {
+          display: flex;
+          min-height: 100%;
+          flex-direction: column;
+          justify-content: flex-end;
+          gap: 10px;
+        }
+        .subtitle-row {
           width: 100%;
-          text-align: center;
+          padding: 4px 6px;
+          border-radius: 10px;
+          background: transparent !important;
+          border: 0;
+          text-align: left;
+          text-shadow: 0 2px 8px rgba(0, 0, 0, 0.82);
+        }
+        .subtitle-row.partial {
+          opacity: 0.72;
         }
         .original {
-          margin-bottom: 8px;
+          margin-bottom: 6px;
           color: rgba(241, 245, 249, 0.8);
-          font-size: 16px;
+          font-size: 14px;
           line-height: 1.4;
-          white-space: nowrap;
-          overflow: hidden;
-          text-overflow: ellipsis;
         }
         .translated {
           color: #22c55e;
-          font-size: 30px;
+          font-size: 22px;
           font-weight: 800;
-          line-height: 1.28;
-          display: -webkit-box;
-          -webkit-line-clamp: 2;
-          -webkit-box-orient: vertical;
-          overflow: hidden;
+          line-height: 1.35;
         }
         .empty {
-          color: rgba(148, 163, 184, 0.9);
+          display: grid;
+          height: 100%;
+          place-items: center;
+          color: rgba(148, 163, 184, 0.72);
           font-size: 18px;
           font-weight: 600;
+          text-shadow: 0 2px 8px rgba(0, 0, 0, 0.82);
         }
       </style>
+      <button id="subtitle-close" type="button" title="关闭字幕">×</button>
       <div id="subtitle-root"><div class="empty">等待字幕...</div></div>
     `
+
+    independentSubtitleWindow.document
+      .getElementById('subtitle-close')
+      ?.addEventListener('click', () => {
+        independentSubtitleWindow?.close()
+        independentSubtitleWindow = null
+        independentSubtitleWindowOpen.value = false
+      })
 
     independentSubtitleWindow.addEventListener('pagehide', () => {
       independentSubtitleWindow = null
@@ -586,6 +560,12 @@ async function toggleIndependentSubtitleWindow() {
   }
 }
 
+async function ensureIndependentSubtitleWindow() {
+  if (!settings.autoOpenSubtitleWindow) return
+  if (independentSubtitleWindow && !independentSubtitleWindow.closed) return
+  await toggleIndependentSubtitleWindow()
+}
+
 function renderIndependentSubtitleWindow() {
   if (!independentSubtitleWindow || independentSubtitleWindow.closed) {
     independentSubtitleWindow = null
@@ -596,27 +576,56 @@ function renderIndependentSubtitleWindow() {
   const root = independentSubtitleWindow.document.getElementById('subtitle-root')
   if (!root) return
 
-  const subtitle = latestFloatingSubtitle.value
-  if (!subtitle) {
+  const visibleSubtitles = subtitles.value.filter(subtitle => subtitle.translated)
+  if (!visibleSubtitles.length) {
     root.innerHTML = '<div class="empty">等待字幕...</div>'
     return
   }
 
   root.innerHTML = ''
-  if (subtitle.original) {
-    const original = independentSubtitleWindow.document.createElement('div')
-    original.className = 'original'
-    original.textContent = subtitle.original
-    root.appendChild(original)
-  }
-  const translated = independentSubtitleWindow.document.createElement('div')
-  translated.className = 'translated'
-  translated.textContent = subtitle.translated
-  root.appendChild(translated)
+  const list = independentSubtitleWindow.document.createElement('div')
+  list.className = 'subtitle-list'
+
+  visibleSubtitles.slice(-80).forEach((subtitle) => {
+    const row = independentSubtitleWindow.document.createElement('div')
+    row.className = `subtitle-row${subtitle.isPartial ? ' partial' : ''}`
+
+    if (subtitle.original) {
+      const original = independentSubtitleWindow.document.createElement('div')
+      original.className = 'original'
+      original.textContent = subtitle.original
+      row.appendChild(original)
+    }
+
+    const translated = independentSubtitleWindow.document.createElement('div')
+    translated.className = 'translated'
+    translated.textContent = subtitle.translated
+    row.appendChild(translated)
+    list.appendChild(row)
+  })
+
+  root.appendChild(list)
+  root.scrollTop = root.scrollHeight
 }
 
-function sendSettings() {
-  if (ws?.readyState !== WebSocket.OPEN) return
+function sendSettings({ waitForAck = false } = {}) {
+  if (ws?.readyState !== WebSocket.OPEN) return waitForAck ? Promise.resolve(false) : false
+  if (pendingSettingsAck?.timer) {
+    clearTimeout(pendingSettingsAck.timer)
+    pendingSettingsAck.resolve(false)
+    pendingSettingsAck = null
+  }
+  const ackPromise = waitForAck
+    ? new Promise((resolve) => {
+        const timer = setTimeout(() => {
+          if (pendingSettingsAck?.resolve === resolve) {
+            pendingSettingsAck = null
+          }
+          resolve(false)
+        }, 2500)
+        pendingSettingsAck = { resolve, timer }
+      })
+    : null
   ws.send(JSON.stringify({
     type: 'settings',
     data: {
@@ -626,100 +635,64 @@ function sendSettings() {
       enable_tts: settings.enableTTS
     }
   }))
+  return ackPromise || true
 }
 
 function sendAudioBlob(wavBlob) {
-  if (ws?.readyState === WebSocket.OPEN) {
-    ws.send(wavBlob)
-    pendingAudioBlob = null
-    return
+  audioSendQueue.push(wavBlob)
+  if (audioSendQueue.length > maxQueuedAudioChunks) {
+    audioSendQueue.splice(0, audioSendQueue.length - maxQueuedAudioChunks)
+    ElMessage.warning('音频发送积压过多，已丢弃最旧片段')
   }
-  pendingAudioBlob = wavBlob
+  flushAudioQueue()
 }
 
-function triggerFileInput() {
-  fileInput.value?.click()
-}
+function flushAudioQueue() {
+  if (isFlushingAudioQueue || ws?.readyState !== WebSocket.OPEN) return
+  isFlushingAudioQueue = true
 
-function handleDrop(e) {
-  isDragover.value = false
-  const files = e.dataTransfer?.files
-  if (files?.length > 0) {
-    uploadFile(files[0])
-  }
-}
-
-function handleFileSelect(e) {
-  const files = e.target.files
-  if (files?.length > 0) {
-    uploadFile(files[0])
-  }
-}
-
-async function uploadFile(file) {
-  isUploading.value = true
-  uploadResult.value = null
-
-  const formData = new FormData()
-  formData.append('file', file)
-
-  try {
-    const response = await fetch('/api/upload', {
-      method: 'POST',
-      body: formData
-    })
-
-    const data = await response.json()
-
-    if (data.success) {
-      uploadResult.value = data
-      addSubtitle('final', {
-        original: data.original,
-        translated: data.translated,
-        timestamp: new Date().toISOString()
-      })
-      ElMessage.success('文件翻译完成')
-    } else {
-      ElMessage.error(data.detail || '上传失败')
+  const pump = () => {
+    if (ws?.readyState !== WebSocket.OPEN) {
+      isFlushingAudioQueue = false
+      return
     }
-  } catch (err) {
-    ElMessage.error('上传失败: ' + err.message)
-  } finally {
-    isUploading.value = false
+
+    let sent = 0
+    while (audioSendQueue.length && ws.bufferedAmount < 2 * 1024 * 1024 && sent < 24) {
+      ws.send(audioSendQueue.shift())
+      sent += 1
+    }
+
+    if (audioSendQueue.length) {
+      setTimeout(pump, ws.bufferedAmount > 2 * 1024 * 1024 ? 30 : 0)
+      return
+    }
+
+    isFlushingAudioQueue = false
   }
+
+  pump()
 }
 
-async function translateUrl() {
-  if (!inputUrl.value) return
+function resolveSettingsAck() {
+  if (!pendingSettingsAck) return
+  clearTimeout(pendingSettingsAck.timer)
+  pendingSettingsAck.resolve(true)
+  pendingSettingsAck = null
+}
 
-  isUrlLoading.value = true
-  urlResult.value = null
-
-  try {
-    const response = await fetch('/api/translate-url', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url: inputUrl.value })
-    })
-
-    const data = await response.json()
-
-    if (data.success) {
-      urlResult.value = data
-      addSubtitle('final', {
-        original: data.original,
-        translated: data.translated,
-        timestamp: new Date().toISOString()
-      })
-      ElMessage.success('链接翻译完成')
-    } else {
-      ElMessage.error(data.detail || '翻译失败')
-    }
-  } catch (err) {
-    ElMessage.error('翻译失败: ' + err.message)
-  } finally {
-    isUrlLoading.value = false
+function resetAudioTransportState() {
+  if (pendingSettingsAck?.timer) {
+    clearTimeout(pendingSettingsAck.timer)
+    pendingSettingsAck.resolve(false)
+    pendingSettingsAck = null
   }
+  isFlushingAudioQueue = false
+}
+
+function clearAudioQueue() {
+  audioSendQueue.length = 0
+  resetAudioTransportState()
 }
 
 async function toggleCapture() {
@@ -820,6 +793,7 @@ async function startCapture() {
     mediaRecorder = { stop: () => { if (silenceTimeout) clearTimeout(silenceTimeout); processor.disconnect(); captureAudioContext.close() } }
 
     isCapturing.value = true
+    await ensureIndependentSubtitleWindow()
     drawWaveform()
 
     captureStream.getTracks().forEach(track => {
@@ -835,6 +809,7 @@ async function startCapture() {
 
 function stopCapture() {
   isCapturing.value = false
+  clearAudioQueue()
 
   if (mediaRecorder?.state !== 'inactive') {
     mediaRecorder?.stop()
@@ -873,8 +848,9 @@ function toggleRecording() {
 
 function connectWS() {
   if (ws?.readyState === WebSocket.OPEN) {
-    sendSettings()
-    return Promise.resolve()
+    return Promise.resolve(sendSettings({ waitForAck: true })).then(() => {
+      flushAudioQueue()
+    })
   }
   if (ws?.readyState === WebSocket.CONNECTING) {
     return new Promise((resolve, reject) => {
@@ -890,11 +866,11 @@ function connectWS() {
   const openPromise = new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('WebSocket连接超时')), 5000)
 
-    ws.onopen = () => {
+    ws.onopen = async () => {
       clearTimeout(timer)
       wsStatus.value = 'connected'
-      sendSettings()
-      if (pendingAudioBlob) sendAudioBlob(pendingAudioBlob)
+      await sendSettings({ waitForAck: true })
+      flushAudioQueue()
       resolve()
     }
 
@@ -909,6 +885,8 @@ function connectWS() {
     const data = JSON.parse(e.data)
     if (data.type === 'partial' || data.type === 'final') {
       addSubtitle(data.type, data.content)
+    } else if (data.type === 'settings_updated') {
+      resolveSettingsAck()
     } else if (data.type === 'correction') {
       applyCorrection(data.content)
     } else if (data.type === 'error') {
@@ -923,6 +901,7 @@ function connectWS() {
 
   ws.onclose = () => {
     wsStatus.value = 'disconnected'
+    resetAudioTransportState()
     if (isRecording.value || isCapturing.value) {
       setTimeout(connectWS, 3000)
     }
@@ -955,8 +934,9 @@ function addSubtitle(type, content) {
     const partial = subtitles.value.find(s => s.isPartial)
     if (partial) {
       partial.isPartial = false
-      partial.original = original
+      partial.original = original || partial.original
       partial.translated = translated
+      partial.timestamp = timestamp || partial.timestamp
     } else {
       subtitles.value.push({
         id: ++subtitleIdCounter,
@@ -1012,6 +992,7 @@ async function startRecording() {
     }
 
     isRecording.value = true
+    await ensureIndependentSubtitleWindow()
     drawWaveform()
   } catch (err) {
     ElMessage.error('无法访问麦克风: ' + err.message)
@@ -1020,6 +1001,7 @@ async function startRecording() {
 
 function stopRecording() {
   isRecording.value = false
+  clearAudioQueue()
 
   if (wavRecorder) {
     wavRecorder.stop()
@@ -1134,7 +1116,7 @@ watch(
   { deep: true }
 )
 
-watch(latestFloatingSubtitle, renderIndependentSubtitleWindow)
+watch(subtitles, renderIndependentSubtitleWindow, { deep: true })
 
 onMounted(async () => {
   drawWaveform()
@@ -1329,109 +1311,11 @@ body {
 
 .tab-icon { font-size: 16px; }
 
-.upload-area, .url-area, .browser-area {
+.browser-area {
   display: flex;
   flex-direction: column;
   gap: 16px;
 }
-
-.dropzone {
-  border: 2px dashed var(--border);
-  border-radius: 16px;
-  padding: 40px;
-  text-align: center;
-  cursor: pointer;
-  transition: all 0.3s;
-  background: var(--surface);
-}
-
-.dropzone:hover, .dropzone.dragover {
-  border-color: var(--primary);
-  background: rgba(99, 102, 241, 0.05);
-}
-
-.dropzone.uploading {
-  pointer-events: none;
-  opacity: 0.7;
-}
-
-.dropzone-content { display: flex; flex-direction: column; align-items: center; gap: 12px; }
-
-.dropzone-icon { width: 48px; height: 48px; color: var(--primary); }
-.dropzone-text { font-size: 16px; font-weight: 500; color: var(--text-primary); }
-.dropzone-hint { font-size: 13px; color: var(--text-muted); }
-
-.uploading-content { display: flex; flex-direction: column; align-items: center; gap: 16px; }
-
-.upload-spinner {
-  width: 40px;
-  height: 40px;
-  border: 3px solid var(--border);
-  border-top-color: var(--primary);
-  border-radius: 50%;
-  animation: spin 1s linear infinite;
-}
-
-@keyframes spin { to { transform: rotate(360deg); } }
-
-.upload-result {
-  background: var(--surface);
-  border-radius: 16px;
-  border: 1px solid var(--border);
-  overflow: hidden;
-}
-
-.result-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 16px 20px;
-  background: rgba(34, 197, 94, 0.1);
-  border-bottom: 1px solid var(--border);
-  font-weight: 500;
-  color: var(--success);
-}
-
-.result-content { padding: 20px; }
-
-.result-item { margin-bottom: 16px; }
-.result-item:last-child { margin-bottom: 0; }
-.result-item label { display: block; font-size: 12px; color: var(--text-muted); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.05em; }
-.result-item p { font-size: 15px; line-height: 1.6; }
-
-.result-meta { display: flex; gap: 20px; font-size: 12px; color: var(--text-muted); margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); }
-
-.url-input-group { display: flex; gap: 12px; }
-
-.url-input {
-  flex: 1;
-  padding: 14px 18px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  color: var(--text-primary);
-  font-size: 14px;
-  outline: none;
-  transition: border-color 0.2s;
-}
-
-.url-input:focus { border-color: var(--primary); }
-.url-input::placeholder { color: var(--text-muted); }
-
-.url-btn {
-  padding: 14px 28px;
-  background: var(--primary);
-  border: none;
-  border-radius: 12px;
-  color: white;
-  font-size: 14px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.url-btn:hover:not(:disabled) { background: var(--primary-dark); }
-.url-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .browser-controls {
   display: flex;
@@ -1755,6 +1639,11 @@ body {
 .action-btn:hover:not(:disabled) { background: var(--surface-hover); color: var(--text-primary); }
 .action-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .action-btn svg { width: 16px; height: 16px; }
+.subtitle-toggle-btn.active {
+  border-color: rgba(34, 197, 94, 0.45);
+  background: rgba(34, 197, 94, 0.12);
+  color: var(--success);
+}
 
 .mini-action-btn {
   padding: 7px 12px;

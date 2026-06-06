@@ -329,6 +329,12 @@
             <el-switch v-model="showFloatingSubtitles" />
           </div>
           <div class="setting-group">
+            <label>独立字幕</label>
+            <button class="mini-action-btn" @click="toggleIndependentSubtitleWindow">
+              {{ independentSubtitleWindowOpen ? '关闭窗口' : '打开窗口' }}
+            </button>
+          </div>
+          <div class="setting-group">
             <label>API状态</label>
             <span class="api-status" :class="{ connected: apiConnected }">
               {{ apiConnected ? '已连接' : '未配置' }}
@@ -363,6 +369,7 @@ const waveformCanvas = ref(null)
 const fileInput = ref(null)
 const showSettings = ref(false)
 const showFloatingSubtitles = ref(false)
+const independentSubtitleWindowOpen = ref(false)
 const fontSize = ref(20)
 const subtitleCount = ref(0)
 const activeTab = ref('mic')
@@ -410,6 +417,7 @@ let animationId = null
 let subtitleIdCounter = 0
 let captureStream = null
 let pendingAudioBlob = null
+let independentSubtitleWindow = null
 
 const latestSubtitle = computed(() => {
   for (let i = subtitles.value.length - 1; i >= 0; i--) {
@@ -493,6 +501,127 @@ function swapLangs() {
 function handleInputModeChange() {
   if (isRecording.value) stopRecording()
   if (isCapturing.value) stopCapture()
+}
+
+async function toggleIndependentSubtitleWindow() {
+  if (independentSubtitleWindow && !independentSubtitleWindow.closed) {
+    independentSubtitleWindow.close()
+    independentSubtitleWindow = null
+    independentSubtitleWindowOpen.value = false
+    return
+  }
+
+  try {
+    if ('documentPictureInPicture' in window) {
+      independentSubtitleWindow = await window.documentPictureInPicture.requestWindow({
+        width: 900,
+        height: 180
+      })
+    } else {
+      independentSubtitleWindow = window.open('', 'ai_subtitle_window', 'width=900,height=180,alwaysRaised=yes')
+    }
+
+    if (!independentSubtitleWindow) {
+      ElMessage.warning('字幕窗口被浏览器拦截，请允许弹出窗口')
+      return
+    }
+
+    independentSubtitleWindow.document.title = '独立字幕'
+    independentSubtitleWindow.document.body.innerHTML = `
+      <style>
+        * { box-sizing: border-box; }
+        html, body {
+          margin: 0;
+          width: 100%;
+          height: 100%;
+          overflow: hidden;
+          background: rgba(5, 8, 20, 0.86);
+          color: #f8fafc;
+          font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        }
+        body {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          padding: 18px 24px;
+        }
+        #subtitle-root {
+          width: 100%;
+          text-align: center;
+        }
+        .original {
+          margin-bottom: 8px;
+          color: rgba(241, 245, 249, 0.8);
+          font-size: 16px;
+          line-height: 1.4;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+        .translated {
+          color: #22c55e;
+          font-size: 30px;
+          font-weight: 800;
+          line-height: 1.28;
+          display: -webkit-box;
+          -webkit-line-clamp: 2;
+          -webkit-box-orient: vertical;
+          overflow: hidden;
+        }
+        .empty {
+          color: rgba(148, 163, 184, 0.9);
+          font-size: 18px;
+          font-weight: 600;
+        }
+      </style>
+      <div id="subtitle-root"><div class="empty">等待字幕...</div></div>
+    `
+
+    independentSubtitleWindow.addEventListener('pagehide', () => {
+      independentSubtitleWindow = null
+      independentSubtitleWindowOpen.value = false
+    })
+    independentSubtitleWindow.addEventListener('beforeunload', () => {
+      independentSubtitleWindow = null
+      independentSubtitleWindowOpen.value = false
+    })
+
+    independentSubtitleWindowOpen.value = true
+    renderIndependentSubtitleWindow()
+  } catch (err) {
+    independentSubtitleWindow = null
+    independentSubtitleWindowOpen.value = false
+    ElMessage.error('无法打开独立字幕窗口: ' + err.message)
+  }
+}
+
+function renderIndependentSubtitleWindow() {
+  if (!independentSubtitleWindow || independentSubtitleWindow.closed) {
+    independentSubtitleWindow = null
+    independentSubtitleWindowOpen.value = false
+    return
+  }
+
+  const root = independentSubtitleWindow.document.getElementById('subtitle-root')
+  if (!root) return
+
+  const subtitle = latestFloatingSubtitle.value
+  if (!subtitle) {
+    root.innerHTML = '<div class="empty">等待字幕...</div>'
+    return
+  }
+
+  root.innerHTML = ''
+  if (subtitle.original) {
+    const original = independentSubtitleWindow.document.createElement('div')
+    original.className = 'original'
+    original.textContent = subtitle.original
+    root.appendChild(original)
+  }
+  const translated = independentSubtitleWindow.document.createElement('div')
+  translated.className = 'translated'
+  translated.textContent = subtitle.translated
+  root.appendChild(translated)
 }
 
 function sendSettings() {
@@ -1014,6 +1143,8 @@ watch(
   { deep: true }
 )
 
+watch(latestFloatingSubtitle, renderIndependentSubtitleWindow)
+
 onMounted(async () => {
   drawWaveform()
 
@@ -1029,6 +1160,9 @@ onMounted(async () => {
 onUnmounted(() => {
   stopRecording()
   stopCapture()
+  if (independentSubtitleWindow && !independentSubtitleWindow.closed) {
+    independentSubtitleWindow.close()
+  }
   if (animationId) cancelAnimationFrame(animationId)
 })
 </script>
@@ -1630,6 +1764,23 @@ body {
 .action-btn:hover:not(:disabled) { background: var(--surface-hover); color: var(--text-primary); }
 .action-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .action-btn svg { width: 16px; height: 16px; }
+
+.mini-action-btn {
+  padding: 7px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.mini-action-btn:hover {
+  background: var(--surface-hover);
+  border-color: var(--primary);
+}
 
 .settings-drawer { position: fixed; inset: 0; z-index: 100; pointer-events: none; }
 .settings-drawer.open { pointer-events: all; }

@@ -1,12 +1,18 @@
-<template>
-  <div class="app" :class="{ 'is-recording': isRecording || isCapturing }">
-    <div class="background-effects">
+﻿<template>
+  <div
+    class="app"
+    :class="{
+      'is-recording': isRecording || isCapturing,
+      'subtitle-window-mode': isSubtitleWindowMode
+    }"
+  >
+    <div v-if="!isSubtitleWindowMode" class="background-effects">
       <div class="gradient-orb orb-1"></div>
       <div class="gradient-orb orb-2"></div>
       <div class="gradient-orb orb-3"></div>
     </div>
 
-    <header class="app-header">
+    <header v-if="!isSubtitleWindowMode" class="app-header">
       <div class="header-left">
         <div class="logo">
           <div class="logo-icon">
@@ -39,7 +45,7 @@
         </div>
       </div>
       <div class="header-right">
-        <button class="icon-btn" @click="showSettings = true" title="设置">
+        <button class="icon-btn" @click="showSettings = true" title="璁剧疆">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
           </svg>
@@ -47,7 +53,7 @@
       </div>
     </header>
 
-    <main class="app-main">
+    <main v-if="!isSubtitleWindowMode" class="app-main">
       <div class="input-tabs">
         <button 
           v-for="tab in tabs" 
@@ -72,7 +78,7 @@
               </svg>
             </div>
             <div>
-              <h3>浏览器音频捕获</h3>
+              <h3>桌面音频捕获</h3>
               <p>捕获浏览器标签页或系统音频进行实时翻译</p>
             </div>
           </div>
@@ -129,8 +135,10 @@
                   <span class="text">{{ sub.translated }}</span>
                 </div>
               </div>
-              <div class="subtitle-actions" v-if="sub.isCorrected">
-                <span class="correction-badge">已修正</span>
+              <div class="subtitle-actions" v-if="sub.correctionStatus">
+                <span class="correction-badge" :class="`status-${sub.correctionStatus}`">
+                  {{ correctionStatusLabel(sub.correctionStatus) }}
+                </span>
               </div>
             </div>
           </transition-group>
@@ -142,7 +150,7 @@
       </div>
     </main>
 
-    <footer class="app-footer">
+    <footer v-if="!isSubtitleWindowMode" class="app-footer">
       <div class="footer-left">
         <div class="lang-switcher">
           <label class="select-field">
@@ -202,14 +210,14 @@
       <div class="footer-right">
         <button
           class="action-btn subtitle-toggle-btn"
-          :class="{ active: independentSubtitleWindowOpen }"
+          :class="{ active: subtitleWindowActive }"
           @click="toggleIndependentSubtitleWindow"
         >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M4 5h16a2 2 0 012 2v8a2 2 0 01-2 2H8l-4 4v-4H4a2 2 0 01-2-2V7a2 2 0 012-2z"/>
             <path d="M7 9h10M7 13h6"/>
           </svg>
-          <span>{{ independentSubtitleWindowOpen ? '字幕开' : '字幕关' }}</span>
+          <span>{{ subtitleWindowActive ? '字幕开' : '字幕关' }}</span>
         </button>
         <button class="action-btn" @click="exportSubtitles" :disabled="subtitles.length === 0">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -226,7 +234,7 @@
       </div>
     </footer>
 
-    <div class="settings-drawer" :class="{ open: showSettings }">
+    <div v-if="!isSubtitleWindowMode" class="settings-drawer" :class="{ open: showSettings }">
       <div class="drawer-overlay" @click="showSettings = false"></div>
       <div class="drawer-content">
         <div class="drawer-header">
@@ -243,19 +251,11 @@
             <el-switch v-model="settings.enableCorrection" />
           </div>
           <div class="setting-group">
-            <label>语音播报</label>
-            <el-switch v-model="settings.enableTTS" />
-          </div>
-          <div class="setting-group">
-            <label>字幕大小</label>
-            <el-slider v-model="fontSize" :min="14" :max="32" :step="2" />
-          </div>
-          <div class="setting-group">
             <label>识别时自动打开字幕</label>
             <el-switch v-model="settings.autoOpenSubtitleWindow" />
           </div>
           <div class="setting-group">
-            <label>API状态</label>
+            <label>API 状态</label>
             <span class="api-status" :class="{ connected: apiConnected }">
               {{ apiConnected ? '已连接' : '未配置' }}
             </span>
@@ -264,13 +264,36 @@
       </div>
     </div>
 
+    <div
+      v-if="shouldShowFloatingSubtitle"
+      class="floating-subtitle-overlay"
+      :style="{ left: `${floatingSubtitlePosition.x}px`, bottom: `${floatingSubtitlePosition.bottom}px` }"
+      @pointerdown="startFloatingSubtitleDrag"
+    >
+      <button class="floating-subtitle-close" type="button" @click="closeSubtitleWindow">×</button>
+      <div v-if="activeFloatingSubtitleBlock.original || activeFloatingSubtitleBlock.translated" class="floating-subtitle-content">
+        <div
+          class="floating-subtitle-row"
+          :class="{ partial: activeFloatingSubtitleBlock.isPartial, corrected: activeFloatingSubtitleBlock.isCorrected }"
+        >
+          <div v-if="activeFloatingSubtitleBlock.original" class="floating-subtitle-original">
+            {{ formatFloatingText(activeFloatingSubtitleBlock.original, 260) }}
+          </div>
+          <div v-if="activeFloatingSubtitleBlock.translated" class="floating-subtitle-translated">
+            {{ formatFloatingText(activeFloatingSubtitleBlock.translated, 300) }}
+          </div>
+        </div>
+      </div>
+      <div v-else class="floating-subtitle-empty">等待字幕...</div>
+    </div>
+
   </div>
 </template>
 
 <script setup>
 import { ref, reactive, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { WavRecorder, encodeWAV } from './utils/audioUtils.js'
+import { WavRecorder, float32ToPcm16Buffer } from './utils/audioUtils.js'
 
 const isRecording = ref(false)
 const isCapturing = ref(false)
@@ -280,8 +303,15 @@ const subtitles = ref([])
 const subtitleContainer = ref(null)
 const waveformCanvas = ref(null)
 const showSettings = ref(false)
+const electronSubtitleWindowOpen = ref(false)
 const independentSubtitleWindowOpen = ref(false)
-const fontSize = ref(20)
+const floatingSubtitleOverlayOpen = ref(false)
+const isSubtitleWindowMode = new URLSearchParams(window.location.search).get('subtitleWindow') === '1'
+const externalSubtitleBlock = ref(null)
+const floatingSubtitlePosition = reactive({
+  x: Math.round(window.innerWidth / 2),
+  bottom: 92
+})
 const subtitleCount = ref(0)
 const activeTab = ref('mic')
 
@@ -289,7 +319,6 @@ const settings = reactive({
   sourceLang: 'EN',
   targetLang: 'ZH',
   enableCorrection: true,
-  enableTTS: false,
   autoOpenSubtitleWindow: true
 })
 
@@ -335,11 +364,16 @@ let wavRecorder = null
 let animationId = null
 let subtitleIdCounter = 0
 let captureStream = null
-const audioSendQueue = []
-const maxQueuedAudioChunks = 1200
-let isFlushingAudioQueue = false
 let pendingSettingsAck = null
 let independentSubtitleWindow = null
+let removeElectronSubtitleClosedListener = null
+let removeElectronSubtitleUpdateListener = null
+let subtitleBroadcastChannel = null
+const pendingPartialSubtitles = new Map()
+const PARTIAL_RENDER_INTERVAL_MS = 180
+const MAX_STORED_SUBTITLES = 80
+const FLOATING_SUBTITLE_ROWS = 3
+const EXTERNAL_SUBTITLE_ROWS = 3
 
 const latestSubtitle = computed(() => {
   for (let i = subtitles.value.length - 1; i >= 0; i--) {
@@ -347,6 +381,31 @@ const latestSubtitle = computed(() => {
   }
   return null
 })
+
+const visibleSubtitleHistory = computed(() =>
+  subtitles.value.filter(subtitle => subtitle.original || subtitle.translated)
+)
+
+const floatingVisibleSubtitles = computed(() =>
+  visibleSubtitleHistory.value.slice(-FLOATING_SUBTITLE_ROWS)
+)
+
+const floatingSubtitleBlock = computed(() => buildSubtitleBlock(floatingVisibleSubtitles.value))
+
+const activeFloatingSubtitleBlock = computed(() =>
+  isSubtitleWindowMode
+    ? externalSubtitleBlock.value || { original: '', translated: '', isPartial: false, isCorrected: false }
+    : floatingSubtitleBlock.value
+)
+
+const shouldShowFloatingSubtitle = computed(() =>
+  isSubtitleWindowMode || (floatingSubtitleOverlayOpen.value && !electronSubtitleWindowOpen.value)
+)
+
+const subtitleWindowActive = computed(() =>
+  electronSubtitleWindowOpen.value ||
+  Boolean(independentSubtitleWindow && !independentSubtitleWindow.closed)
+)
 
 function formatTime(timestamp) {
   if (!timestamp) return ''
@@ -398,6 +457,73 @@ function formatFloatingText(text = '', maxChars = 140) {
   return tail.trim()
 }
 
+function joinSubtitleText(items = [], field = 'translated') {
+  return items
+    .map(item => collapseRepeatedText(item?.[field] || ''))
+    .filter(Boolean)
+    .join(' ')
+    .replace(/\s+([，。！？；、,.!?;:])/g, '$1')
+    .trim()
+}
+
+function buildSubtitleBlock(items = []) {
+  return {
+    original: joinSubtitleText(items, 'original'),
+    translated: joinSubtitleText(items, 'translated'),
+    isPartial: items.some(item => item?.isPartial),
+    isCorrected: items.some(item => item?.isCorrected)
+  }
+}
+
+function correctionStatusLabel(status = '') {
+  const labels = {
+    checking: '检查中',
+    checked: '无需修正',
+    corrected: '已修正',
+    failed: '纠错失败',
+    skipped: '已跳过'
+  }
+  return labels[status] || status
+}
+
+function serializeSubtitle(subtitle = {}) {
+  return {
+    id: subtitle.id,
+    itemId: subtitle.itemId,
+    original: subtitle.original || '',
+    translated: subtitle.translated || '',
+    timestamp: subtitle.timestamp || '',
+    source: subtitle.source || '',
+    isPartial: Boolean(subtitle.isPartial),
+    isCorrected: Boolean(subtitle.isCorrected),
+    correctionStatus: subtitle.correctionStatus || ''
+  }
+}
+
+function serializeSubtitleBlock(block = {}) {
+  return {
+    original: block.original || '',
+    translated: block.translated || '',
+    isPartial: Boolean(block.isPartial),
+    isCorrected: Boolean(block.isCorrected)
+  }
+}
+
+function applySubtitleWindowPayload(payload) {
+  const block = payload?.block || buildSubtitleBlock(Array.isArray(payload?.items) ? payload.items : Array.isArray(payload) ? payload : [])
+  externalSubtitleBlock.value = block
+}
+
+function mirrorSubtitlePayload(payload) {
+  try {
+    localStorage.setItem('ai-interpreter-subtitle-payload', JSON.stringify(payload))
+  } catch {}
+
+  try {
+    subtitleBroadcastChannel?.postMessage(payload)
+  } catch {}
+}
+
 function cycleLang(type) {
   const idx = langOptions.indexOf(settings[type === 'source' ? 'sourceLang' : 'targetLang'])
   settings[type === 'source' ? 'sourceLang' : 'targetLang'] = langOptions[(idx + 1) % langOptions.length]
@@ -415,12 +541,81 @@ function handleInputModeChange() {
   if (isCapturing.value) stopCapture()
 }
 
+function startFloatingSubtitleDrag(event) {
+  if (event.target?.closest?.('.floating-subtitle-close')) return
+  event.preventDefault()
+
+  const startX = event.clientX
+  const startY = event.clientY
+  const originX = floatingSubtitlePosition.x
+  const originBottom = floatingSubtitlePosition.bottom
+
+  const move = (moveEvent) => {
+    floatingSubtitlePosition.x = Math.min(
+      window.innerWidth - 24,
+      Math.max(24, originX + moveEvent.clientX - startX)
+    )
+    floatingSubtitlePosition.bottom = Math.min(
+      window.innerHeight - 80,
+      Math.max(24, originBottom - (moveEvent.clientY - startY))
+    )
+  }
+  const stop = () => {
+    window.removeEventListener('pointermove', move)
+    window.removeEventListener('pointerup', stop)
+  }
+
+  window.addEventListener('pointermove', move)
+  window.addEventListener('pointerup', stop, { once: true })
+}
+
+function getElectronSubtitles() {
+  if (window.electronSubtitles) return window.electronSubtitles
+
+  try {
+    const ipcRenderer = window.require?.('electron')?.ipcRenderer
+    if (!ipcRenderer) return null
+
+    return {
+      toggle: () => ipcRenderer.invoke('subtitle-window:toggle'),
+      close: () => ipcRenderer.invoke('subtitle-window:close'),
+      isOpen: () => ipcRenderer.invoke('subtitle-window:is-open'),
+      update: (items) => ipcRenderer.invoke('subtitle-window:update', items),
+      getLatest: () => ipcRenderer.invoke('subtitle-window:get-latest'),
+      onClosed: (callback) => {
+        const listener = () => callback()
+        ipcRenderer.on('subtitle-window:closed', listener)
+        return () => ipcRenderer.removeListener('subtitle-window:closed', listener)
+      },
+      onUpdate: (callback) => {
+        const listener = (_event, items) => callback(items)
+        ipcRenderer.on('subtitle-window:data', listener)
+        return () => ipcRenderer.removeListener('subtitle-window:data', listener)
+      }
+    }
+  } catch {
+    return null
+  }
+}
+
 async function toggleIndependentSubtitleWindow() {
-  if (independentSubtitleWindow && !independentSubtitleWindow.closed) {
-    independentSubtitleWindow.close()
-    independentSubtitleWindow = null
-    independentSubtitleWindowOpen.value = false
+  if (electronSubtitleWindowOpen.value || (independentSubtitleWindow && !independentSubtitleWindow.closed)) {
+    closeSubtitleWindow()
     return
+  }
+
+  const electronSubtitles = getElectronSubtitles()
+  if (electronSubtitles) {
+    try {
+      const result = await electronSubtitles.toggle()
+      electronSubtitleWindowOpen.value = Boolean(result?.opened)
+      independentSubtitleWindowOpen.value = false
+      floatingSubtitleOverlayOpen.value = false
+      renderIndependentSubtitleWindow()
+      return
+    } catch (err) {
+      console.warn('Electron subtitle window unavailable:', err)
+    }
   }
 
   try {
@@ -434,7 +629,8 @@ async function toggleIndependentSubtitleWindow() {
     }
 
     if (!independentSubtitleWindow) {
-      ElMessage.warning('字幕窗口被浏览器拦截，请允许弹出窗口')
+      floatingSubtitleOverlayOpen.value = true
+      ElMessage.warning('独立字幕窗口被拦截，已打开应用内透明字幕')
       return
     }
 
@@ -464,12 +660,12 @@ async function toggleIndependentSubtitleWindow() {
           height: 28px;
           border: 1px solid rgba(248, 250, 252, 0.24);
           border-radius: 999px;
-          background: rgba(2, 6, 23, 0.28);
+          background: transparent;
           color: rgba(248, 250, 252, 0.88);
           font-size: 18px;
           line-height: 24px;
           cursor: pointer;
-          backdrop-filter: blur(8px);
+          text-shadow: 0 2px 8px rgba(0, 0, 0, 0.9);
         }
         #subtitle-close:hover {
           background: rgba(239, 68, 68, 0.72);
@@ -481,6 +677,8 @@ async function toggleIndependentSubtitleWindow() {
           overflow-y: auto;
           padding: 24px 12px 0 0;
           scroll-behavior: smooth;
+          background: transparent !important;
+          background-color: transparent !important;
         }
         #subtitle-root::-webkit-scrollbar {
           width: 8px;
@@ -552,21 +750,69 @@ async function toggleIndependentSubtitleWindow() {
     })
 
     independentSubtitleWindowOpen.value = true
+    floatingSubtitleOverlayOpen.value = true
     renderIndependentSubtitleWindow()
   } catch (err) {
     independentSubtitleWindow = null
     independentSubtitleWindowOpen.value = false
-    ElMessage.error('无法打开独立字幕窗口: ' + err.message)
+    floatingSubtitleOverlayOpen.value = true
+    ElMessage.warning('独立字幕窗口不可用，已打开应用内透明字幕')
   }
 }
 
 async function ensureIndependentSubtitleWindow() {
   if (!settings.autoOpenSubtitleWindow) return
-  if (independentSubtitleWindow && !independentSubtitleWindow.closed) return
+  if (electronSubtitleWindowOpen.value || (independentSubtitleWindow && !independentSubtitleWindow.closed)) return
   await toggleIndependentSubtitleWindow()
 }
 
+function closeSubtitleWindow() {
+  const electronSubtitles = getElectronSubtitles()
+  if (isSubtitleWindowMode) {
+    electronSubtitles?.close?.().catch(() => {})
+    return
+  }
+  if (electronSubtitles && electronSubtitleWindowOpen.value) {
+    electronSubtitles.close().catch(() => {})
+  }
+  electronSubtitleWindowOpen.value = false
+
+  if (independentSubtitleWindow && !independentSubtitleWindow.closed) {
+    independentSubtitleWindow.close()
+  }
+  independentSubtitleWindow = null
+  independentSubtitleWindowOpen.value = false
+  floatingSubtitleOverlayOpen.value = false
+}
+
 function renderIndependentSubtitleWindow() {
+  const visibleSubtitles = visibleSubtitleHistory.value
+  const items = visibleSubtitles
+    .slice(-EXTERNAL_SUBTITLE_ROWS)
+    .map(serializeSubtitle)
+  const subtitlePayload = {
+    block: serializeSubtitleBlock(floatingSubtitleBlock.value),
+    items
+  }
+  mirrorSubtitlePayload(subtitlePayload)
+  const electronSubtitles = getElectronSubtitles()
+
+  if (electronSubtitles) {
+    electronSubtitles.update(subtitlePayload)
+      .then((result) => {
+        if (result && result.opened === false) {
+          electronSubtitleWindowOpen.value = false
+        } else if (result?.opened) {
+          electronSubtitleWindowOpen.value = true
+          floatingSubtitleOverlayOpen.value = false
+        }
+      })
+      .catch(() => {
+        electronSubtitleWindowOpen.value = false
+        console.warn('Electron subtitle update failed')
+      })
+  }
+
   if (!independentSubtitleWindow || independentSubtitleWindow.closed) {
     independentSubtitleWindow = null
     independentSubtitleWindowOpen.value = false
@@ -576,33 +822,32 @@ function renderIndependentSubtitleWindow() {
   const root = independentSubtitleWindow.document.getElementById('subtitle-root')
   if (!root) return
 
-  const visibleSubtitles = subtitles.value.filter(subtitle => subtitle.translated)
   if (!visibleSubtitles.length) {
     root.innerHTML = '<div class="empty">等待字幕...</div>'
     return
   }
 
   root.innerHTML = ''
+  const block = buildSubtitleBlock(visibleSubtitles.slice(-EXTERNAL_SUBTITLE_ROWS))
   const list = independentSubtitleWindow.document.createElement('div')
   list.className = 'subtitle-list'
+  const row = independentSubtitleWindow.document.createElement('div')
+  row.className = `subtitle-row${block.isPartial ? ' partial' : ''}`
 
-  visibleSubtitles.slice(-80).forEach((subtitle) => {
-    const row = independentSubtitleWindow.document.createElement('div')
-    row.className = `subtitle-row${subtitle.isPartial ? ' partial' : ''}`
+  if (block.original) {
+    const original = independentSubtitleWindow.document.createElement('div')
+    original.className = 'original'
+    original.textContent = block.original
+    row.appendChild(original)
+  }
 
-    if (subtitle.original) {
-      const original = independentSubtitleWindow.document.createElement('div')
-      original.className = 'original'
-      original.textContent = subtitle.original
-      row.appendChild(original)
-    }
-
+  if (block.translated) {
     const translated = independentSubtitleWindow.document.createElement('div')
     translated.className = 'translated'
-    translated.textContent = subtitle.translated
+    translated.textContent = block.translated
     row.appendChild(translated)
-    list.appendChild(row)
-  })
+  }
+  list.appendChild(row)
 
   root.appendChild(list)
   root.scrollTop = root.scrollHeight
@@ -627,51 +872,24 @@ function sendSettings({ waitForAck = false } = {}) {
       })
     : null
   ws.send(JSON.stringify({
-    type: 'settings',
+    type: 'start',
+    source_lang: settings.sourceLang.toLowerCase(),
+    target_lang: settings.targetLang.toLowerCase(),
+    sample_rate: 16000,
+    format: 'pcm_s16le',
     data: {
       source_lang: settings.sourceLang.toLowerCase(),
       target_lang: settings.targetLang.toLowerCase(),
-      enable_correction: settings.enableCorrection,
-      enable_tts: settings.enableTTS
+      enable_correction: settings.enableCorrection
     }
   }))
   return ackPromise || true
 }
 
-function sendAudioBlob(wavBlob) {
-  audioSendQueue.push(wavBlob)
-  if (audioSendQueue.length > maxQueuedAudioChunks) {
-    audioSendQueue.splice(0, audioSendQueue.length - maxQueuedAudioChunks)
-    ElMessage.warning('音频发送积压过多，已丢弃最旧片段')
-  }
-  flushAudioQueue()
-}
-
-function flushAudioQueue() {
-  if (isFlushingAudioQueue || ws?.readyState !== WebSocket.OPEN) return
-  isFlushingAudioQueue = true
-
-  const pump = () => {
-    if (ws?.readyState !== WebSocket.OPEN) {
-      isFlushingAudioQueue = false
-      return
-    }
-
-    let sent = 0
-    while (audioSendQueue.length && ws.bufferedAmount < 2 * 1024 * 1024 && sent < 24) {
-      ws.send(audioSendQueue.shift())
-      sent += 1
-    }
-
-    if (audioSendQueue.length) {
-      setTimeout(pump, ws.bufferedAmount > 2 * 1024 * 1024 ? 30 : 0)
-      return
-    }
-
-    isFlushingAudioQueue = false
-  }
-
-  pump()
+function sendAudioBuffer(audioBuffer) {
+  if (ws?.readyState !== WebSocket.OPEN || !audioBuffer?.byteLength) return
+  if (ws.bufferedAmount > 2 * 1024 * 1024) return
+  ws.send(audioBuffer)
 }
 
 function resolveSettingsAck() {
@@ -687,11 +905,10 @@ function resetAudioTransportState() {
     pendingSettingsAck.resolve(false)
     pendingSettingsAck = null
   }
-  isFlushingAudioQueue = false
 }
 
 function clearAudioQueue() {
-  audioSendQueue.length = 0
+  clearAllPendingPartialSubtitles()
   resetAudioTransportState()
 }
 
@@ -723,74 +940,23 @@ async function startCapture() {
       return
     }
 
-    const captureAudioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 })
-    const source = captureAudioContext.createMediaStreamSource(captureStream)
-    analyser = captureAudioContext.createAnalyser()
-    analyser.fftSize = 2048
-    source.connect(analyser)
+    wavRecorder = new WavRecorder(16000, {
+      bufferDuration: 0.04,
+      continuous: true
+    })
+    await wavRecorder.start((pcmBuffer) => {
+      sendAudioBuffer(pcmBuffer)
+    }, captureStream)
 
-    const bufferSize = Math.floor(16000 * 0.08)
-    let buffer = []
-    let isSpeaking = false
-    let silenceTimeout = null
-    let voiceFrameCount = 0
-    const energyThreshold = 0.065
-    const maxSilenceMs = 450
-    const minVoiceFrames = 5
-
-    const processor = captureAudioContext.createScriptProcessor(4096, 1, 1)
-    source.connect(processor)
-    processor.connect(captureAudioContext.destination)
-
-    processor.onaudioprocess = (e) => {
-      const inputData = e.inputBuffer.getChannelData(0)
-      buffer.push(...inputData)
-      while (buffer.length >= bufferSize) {
-        const chunk = buffer.splice(0, bufferSize)
-        const wavBlob = encodeWAV(new Float32Array(chunk), 16000)
-        sendAudioBlob(wavBlob)
-      }
-      return
-
-      let sum = 0
-      for (let i = 0; i < inputData.length; i++) sum += inputData[i] * inputData[i]
-      const rms = Math.sqrt(sum / inputData.length)
-      const hasVoice = rms > energyThreshold
-
-      if (hasVoice) {
-        voiceFrameCount++
-        if (voiceFrameCount >= minVoiceFrames) {
-          isSpeaking = true
-          if (silenceTimeout) { clearTimeout(silenceTimeout); silenceTimeout = null }
-        }
-        if (isSpeaking) buffer.push(...inputData)
-      } else {
-        voiceFrameCount = 0
-        if (isSpeaking) {
-          buffer.push(...inputData)
-          if (!silenceTimeout) {
-            silenceTimeout = setTimeout(() => {
-              isSpeaking = false
-              silenceTimeout = null
-              voiceFrameCount = 0
-              if (buffer.length > 0) {
-                const wavBlob = encodeWAV(new Float32Array(buffer), 16000)
-                buffer = []
-                sendAudioBlob(wavBlob)
-              }
-            }, maxSilenceMs)
-          }
-        }
-      }
-
-      if (buffer.length >= bufferSize && isSpeaking) {
-        const chunk = buffer.splice(0, bufferSize)
-        const wavBlob = encodeWAV(new Float32Array(chunk), 16000)
-        sendAudioBlob(wavBlob)
-      }
+    audioContext = wavRecorder.audioContext
+    if (audioContext) {
+      const source = audioContext.createMediaStreamSource(captureStream)
+      analyser = audioContext.createAnalyser()
+      analyser.fftSize = 2048
+      source.connect(analyser)
     }
 
-    mediaRecorder = { stop: () => { if (silenceTimeout) clearTimeout(silenceTimeout); processor.disconnect(); captureAudioContext.close() } }
+    mediaRecorder = { stop: () => wavRecorder?.stop() }
 
     isCapturing.value = true
     await ensureIndependentSubtitleWindow()
@@ -813,6 +979,11 @@ function stopCapture() {
 
   if (mediaRecorder?.state !== 'inactive') {
     mediaRecorder?.stop()
+  }
+
+  if (wavRecorder) {
+    wavRecorder.stop()
+    wavRecorder = null
   }
 
   if (captureStream) {
@@ -848,9 +1019,7 @@ function toggleRecording() {
 
 function connectWS() {
   if (ws?.readyState === WebSocket.OPEN) {
-    return Promise.resolve(sendSettings({ waitForAck: true })).then(() => {
-      flushAudioQueue()
-    })
+    return Promise.resolve(sendSettings({ waitForAck: true })).then(() => true)
   }
   if (ws?.readyState === WebSocket.CONNECTING) {
     return new Promise((resolve, reject) => {
@@ -870,7 +1039,6 @@ function connectWS() {
       clearTimeout(timer)
       wsStatus.value = 'connected'
       await sendSettings({ waitForAck: true })
-      flushAudioQueue()
       resolve()
     }
 
@@ -883,12 +1051,32 @@ function connectWS() {
 
   ws.onmessage = (e) => {
     const data = JSON.parse(e.data)
-    if (data.type === 'partial' || data.type === 'final') {
+    if (data.type === 'subtitle_delta') {
+      addSubtitle('partial', {
+        ...data.content,
+        item_id: data.content?.segment_id,
+        source: 'livetranslate'
+      })
+    } else if (data.type === 'subtitle') {
+      addSubtitle('final', {
+        ...data.content,
+        item_id: data.content?.segment_id,
+        source: 'livetranslate'
+      })
+    } else if (data.type === 'partial' || data.type === 'final') {
       addSubtitle(data.type, data.content)
+    } else if (data.type === 'asr_partial') {
+      return
+    } else if (data.type === 'asr_final') {
+      addAsrFallback(data.content)
+    } else if (data.type === 'asr_translation') {
+      addAsrFallback(data.content, { updateTranslation: true })
     } else if (data.type === 'settings_updated') {
       resolveSettingsAck()
     } else if (data.type === 'correction') {
       applyCorrection(data.content)
+    } else if (data.type === 'correction_status') {
+      applyCorrectionStatus(data.content)
     } else if (data.type === 'error') {
       addSubtitle('final', {
         original: '服务返回错误',
@@ -911,75 +1099,337 @@ function connectWS() {
 }
 
 function addSubtitle(type, content) {
-  let { original, translated, timestamp } = content
+  let { original, translated, timestamp, item_id: itemId, source } = content
+  source = source || 'livetranslate'
   if (type === 'partial') {
     original = collapseRepeatedText(original)
     translated = collapseRepeatedText(translated)
+    queuePartialSubtitle({
+      ...content,
+      original,
+      translated,
+      timestamp,
+      item_id: itemId,
+      source
+    })
+    return
   }
 
-  if (type === 'partial') {
-    const existing = subtitles.value.find(s => s.isPartial)
-    if (existing) {
-      existing.original = original
-      existing.translated = translated
-      existing.timestamp = timestamp
-    } else {
-      subtitles.value.push({
-        id: ++subtitleIdCounter,
-        original, translated, timestamp,
-        isPartial: true, isCorrected: false
-      })
-    }
+  clearPendingPartialSubtitle(itemId, source)
+
+  const partial = itemId
+    ? subtitles.value.find(s => s.itemId === itemId) ||
+      (String(itemId).startsWith('synthetic_') ? subtitles.value.find(s => s.isPartial && s.source === source) : null)
+    : subtitles.value.find(s => s.isPartial && s.source === source)
+  if (partial) {
+    partial.isPartial = false
+    partial.original = original || partial.original
+    partial.translated = translated
+    partial.timestamp = timestamp || partial.timestamp
+    partial.source = pickSubtitleSource(partial.source, source)
+    partial.correctionStatus = settings.enableCorrection && source === 'livetranslate' ? 'checking' : ''
   } else {
-    const partial = subtitles.value.find(s => s.isPartial)
-    if (partial) {
-      partial.isPartial = false
-      partial.original = original || partial.original
-      partial.translated = translated
-      partial.timestamp = timestamp || partial.timestamp
-    } else {
-      subtitles.value.push({
-        id: ++subtitleIdCounter,
-        original, translated, timestamp,
-        isPartial: false, isCorrected: false
-      })
-    }
+    subtitles.value.push({
+      id: ++subtitleIdCounter,
+      itemId,
+      original, translated, timestamp,
+      source,
+      isPartial: false,
+      isCorrected: false,
+      correctionStatus: settings.enableCorrection && source === 'livetranslate' ? 'checking' : ''
+    })
   }
 
+  pruneSubtitles()
+}
+
+function partialSubtitleKey(itemId = '', source = 'livetranslate') {
+  return itemId || `active:${source || 'livetranslate'}`
+}
+
+function queuePartialSubtitle(content) {
+  const source = content.source || 'livetranslate'
+  const itemId = content.item_id || content.itemId || ''
+  const key = partialSubtitleKey(itemId, source)
+  const existing = pendingPartialSubtitles.get(key)
+  const next = {
+    ...existing?.content,
+    ...content,
+    item_id: itemId,
+    source
+  }
+
+  if (existing) {
+    existing.content = next
+    return
+  }
+
+  const pending = {
+    content: next,
+    timer: setTimeout(() => {
+      pendingPartialSubtitles.delete(key)
+      applyPartialSubtitle(pending.content)
+    }, PARTIAL_RENDER_INTERVAL_MS)
+  }
+  pendingPartialSubtitles.set(key, pending)
+}
+
+function clearPendingPartialSubtitle(itemId = '', source = 'livetranslate') {
+  const key = partialSubtitleKey(itemId, source)
+  const pending = pendingPartialSubtitles.get(key)
+  if (!pending) return
+  clearTimeout(pending.timer)
+  pendingPartialSubtitles.delete(key)
+}
+
+function clearAllPendingPartialSubtitles() {
+  for (const pending of pendingPartialSubtitles.values()) {
+    clearTimeout(pending.timer)
+  }
+  pendingPartialSubtitles.clear()
+}
+
+function applyPartialSubtitle(content) {
+  const itemId = content.item_id || content.itemId || ''
+  const source = content.source || 'livetranslate'
+  const original = content.original || ''
+  const translated = content.translated || ''
+  const timestamp = content.timestamp
+  const existing = itemId
+    ? subtitles.value.find(s => s.itemId === itemId)
+    : subtitles.value.find(s => s.isPartial && s.source === source)
+
+  if (existing) {
+    if (!shouldUpdatePartialText(existing.original, original) && !shouldUpdatePartialText(existing.translated, translated)) {
+      return
+    }
+    existing.original = original || existing.original
+    existing.translated = translated || existing.translated
+    existing.timestamp = timestamp || existing.timestamp
+    existing.source = source || existing.source
+  } else {
+    subtitles.value.push({
+      id: ++subtitleIdCounter,
+      itemId,
+      original,
+      translated,
+      timestamp,
+      source,
+      isPartial: true,
+      isCorrected: false,
+      correctionStatus: ''
+    })
+  }
+
+  pruneSubtitles()
+}
+
+function shouldUpdatePartialText(previous = '', next = '') {
+  if (!next || previous === next) return false
+  if (!previous) return true
+  if (next.length - previous.length >= 4) return true
+  return /[。！？；，,.!?;]$/.test(next)
+}
+
+function sourceRank(source = '') {
+  if (source === 'livetranslate') return 3
+  if (source === 'livetranslate_secondary') return 2
+  if (source === 'asr_fallback') return 1
+  return 0
+}
+
+function pickSubtitleSource(current = '', incoming = '') {
+  return sourceRank(incoming) >= sourceRank(current) ? incoming : current
+}
+
+function shouldMergeSubtitle(existing, incomingSource, incomingType) {
+  if (!existing) return false
+  if (existing.source === incomingSource) return true
+  if (incomingSource === 'livetranslate') return true
+  if (!existing.isPartial && incomingSource === 'livetranslate_secondary') return false
+  if (existing.source === 'livetranslate' && incomingType === 'partial') {
+    return existing.isPartial
+  }
+  return sourceRank(incomingSource) >= sourceRank(existing.source) || existing.isPartial
+}
+
+function findMergeCandidate(original = '', translated = '', source = '') {
+  const recent = subtitles.value.slice(-16).reverse()
+  return recent.find(subtitle => {
+    if (!subtitle.isPartial) return false
+    if (subtitle.source === 'asr_fallback' && source !== 'livetranslate') return false
+    return (
+      isSimilarSubtitleText(subtitle.original, original) ||
+      isSimilarSubtitleText(subtitle.translated, translated) ||
+      isSimilarSubtitleText(subtitle.original, translated) ||
+      isSimilarSubtitleText(subtitle.translated, original)
+    )
+  })
+}
+
+function normalizeSubtitleText(text = '') {
+  return collapseRepeatedText(text)
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\u4e00-\u9fff]+/gu, '')
+}
+
+function isSimilarSubtitleText(a = '', b = '') {
+  const left = normalizeSubtitleText(a)
+  const right = normalizeSubtitleText(b)
+  if (!left || !right) return false
+  if (left === right || left.includes(right) || right.includes(left)) return true
+  const shorter = Math.min(left.length, right.length)
+  const longer = Math.max(left.length, right.length)
+  return shorter >= 8 && shorter / longer > 0.82
+}
+
+function findSimilarRecentSubtitle(original = '') {
+  const recent = subtitles.value.slice(-12)
+  return recent.find(subtitle =>
+    isSimilarSubtitleText(subtitle.original, original) ||
+    isSimilarSubtitleText(subtitle.translated, original)
+  )
+}
+
+function addAsrFallback(content, options = {}) {
+  const original = collapseRepeatedText(content.original || '')
+  if (!original) return
+
+  const timestamp = content.timestamp || new Date().toISOString()
+  const translated = collapseRepeatedText(content.translated || '')
+  const existingFallback = subtitles.value
+    .slice()
+    .reverse()
+    .find(subtitle =>
+      subtitle.source === 'asr_fallback' &&
+      isSimilarSubtitleText(subtitle.original, original)
+    )
+
+  if (existingFallback) {
+    if (translated) {
+      existingFallback.translated = translated
+      existingFallback.timestamp = timestamp
+      existingFallback.isPartial = false
+    }
+    pruneSubtitles()
+    return
+  }
+
+  const similarLiveSubtitle = findSimilarRecentSubtitle(original)
+  if (similarLiveSubtitle && similarLiveSubtitle.source !== 'asr_fallback') {
+    return
+  }
+
+  subtitles.value.push({
+    id: ++subtitleIdCounter,
+    itemId: content.item_id,
+    original,
+    translated: translated || '等待兜底翻译...',
+    timestamp,
+    source: 'asr_fallback',
+    isPartial: !translated,
+    isCorrected: false,
+    correctionStatus: ''
+  })
+
+  pruneSubtitles()
+}
+
+function pruneSubtitles() {
   subtitleCount.value = subtitles.value.length
 
-  if (subtitles.value.length > 100) {
-    subtitles.value = subtitles.value.slice(-100)
+  if (subtitles.value.length > MAX_STORED_SUBTITLES) {
+    subtitles.value = subtitles.value.slice(-MAX_STORED_SUBTITLES)
   }
 
   nextTick(() => {
     if (subtitleContainer.value) {
       subtitleContainer.value.scrollTop = subtitleContainer.value.scrollHeight
     }
+    renderIndependentSubtitleWindow()
   })
 }
 
 function applyCorrection(content) {
+  if (Array.isArray(content?.replacements)) {
+    for (const replacement of content.replacements) {
+      const segmentId = replacement.segment_id || replacement.item_id
+      const subtitle = findCorrectionTarget(segmentId, replacement)
+      if (!subtitle) continue
+      subtitle.original = replacement.original || subtitle.original
+      subtitle.translated = replacement.translated || subtitle.translated
+      subtitle.isCorrected = true
+      subtitle.isPartial = false
+      subtitle.correctionStatus = content.status || replacement.status || 'corrected'
+    }
+    renderIndependentSubtitleWindow()
+    return
+  }
+
+  if (content?.segment_id || content?.item_id) {
+    const segmentId = content.segment_id || content.item_id
+    const subtitle = findCorrectionTarget(segmentId, content)
+    if (subtitle) {
+      subtitle.original = content.original || subtitle.original
+      subtitle.translated = content.translated || subtitle.translated
+      subtitle.isCorrected = true
+      subtitle.isPartial = false
+      subtitle.correctionStatus = content.status || 'corrected'
+      renderIndependentSubtitleWindow()
+    }
+    return
+  }
+
   const { index, original, translated } = content
   if (subtitles.value[index]) {
     subtitles.value[index].original = original
     subtitles.value[index].translated = translated
     subtitles.value[index].isCorrected = true
+    subtitles.value[index].correctionStatus = 'corrected'
   }
+}
+
+function applyCorrectionStatus(content = {}) {
+  const segmentId = content.segment_id || content.item_id
+  const subtitle = findCorrectionTarget(segmentId, content)
+  if (!subtitle) return
+  subtitle.correctionStatus = content.status || ''
+  subtitle.correctionReason = content.reason || ''
+  if (content.status === 'corrected') subtitle.isCorrected = true
+  renderIndependentSubtitleWindow()
+}
+
+function findCorrectionTarget(segmentId, replacement = {}) {
+  if (segmentId) {
+    const byId = subtitles.value.find(s => s.itemId === segmentId)
+    if (byId) return byId
+  }
+
+  const original = replacement.original || ''
+  const translated = replacement.previous_translated || replacement.translated || ''
+  if (!original && !translated) return null
+
+  return subtitles.value
+    .slice(-12)
+    .reverse()
+    .find(subtitle =>
+      isSimilarSubtitleText(subtitle.original, original) ||
+      isSimilarSubtitleText(subtitle.translated, translated)
+    ) || null
 }
 
 async function startRecording() {
   try {
     await connectWS()
     wavRecorder = new WavRecorder(16000, {
-      bufferDuration: 0.08,
+      bufferDuration: 0.04,
       continuous: true,
       energyThreshold: 0.065,
       maxSilenceMs: 450,
       minVoiceFrames: 5
     })
-    await wavRecorder.start((wavBlob) => {
-      sendAudioBlob(wavBlob)
+    await wavRecorder.start((pcmBuffer) => {
+      sendAudioBuffer(pcmBuffer)
     })
 
     mediaStream = wavRecorder.stream
@@ -1101,25 +1551,64 @@ function exportSubtitles() {
 }
 
 function clearSubtitles() {
+  clearAllPendingPartialSubtitles()
   subtitles.value = []
   subtitleCount.value = 0
+  renderIndependentSubtitleWindow()
 }
 
 watch(
   () => ({
     sourceLang: settings.sourceLang,
     targetLang: settings.targetLang,
-    enableCorrection: settings.enableCorrection,
-    enableTTS: settings.enableTTS
+    enableCorrection: settings.enableCorrection
   }),
   sendSettings,
   { deep: true }
 )
 
-watch(subtitles, renderIndependentSubtitleWindow, { deep: true })
-
 onMounted(async () => {
+  if (isSubtitleWindowMode) {
+    document.body.classList.add('subtitle-window-body')
+    const electronSubtitles = getElectronSubtitles()
+    try {
+      const cached = JSON.parse(localStorage.getItem('ai-interpreter-subtitle-payload') || 'null')
+      if (cached) applySubtitleWindowPayload(cached)
+    } catch {}
+
+    try {
+      const latest = await electronSubtitles?.getLatest?.()
+      if (latest?.payload) applySubtitleWindowPayload(latest.payload)
+    } catch {}
+
+    removeElectronSubtitleUpdateListener = electronSubtitles?.onUpdate?.((payload) => {
+      applySubtitleWindowPayload(payload)
+    }) || null
+
+    try {
+      subtitleBroadcastChannel = new BroadcastChannel('ai-interpreter-subtitles')
+      subtitleBroadcastChannel.onmessage = (event) => {
+        applySubtitleWindowPayload(event.data)
+      }
+    } catch {}
+
+    floatingSubtitleOverlayOpen.value = true
+    return
+  }
+
   drawWaveform()
+  const electronSubtitles = getElectronSubtitles()
+  if (electronSubtitles) {
+    try {
+      const result = await electronSubtitles.isOpen()
+      electronSubtitleWindowOpen.value = Boolean(result?.opened)
+      removeElectronSubtitleClosedListener = electronSubtitles.onClosed(() => {
+        electronSubtitleWindowOpen.value = false
+      })
+    } catch {
+      electronSubtitleWindowOpen.value = false
+    }
+  }
 
   try {
     const response = await fetch('/api/status')
@@ -1131,18 +1620,18 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  removeElectronSubtitleUpdateListener?.()
+  subtitleBroadcastChannel?.close?.()
   stopRecording()
   stopCapture()
-  if (independentSubtitleWindow && !independentSubtitleWindow.closed) {
-    independentSubtitleWindow.close()
-  }
+  closeSubtitleWindow()
+  clearAllPendingPartialSubtitles()
+  removeElectronSubtitleClosedListener?.()
   if (animationId) cancelAnimationFrame(animationId)
 })
 </script>
 
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
-
 :root {
   --primary: #6366f1;
   --primary-light: #818cf8;
@@ -1470,10 +1959,35 @@ body {
 .correction-badge {
   font-size: 10px;
   padding: 3px 8px;
+  background: rgba(148, 163, 184, 0.12);
+  color: var(--text-secondary);
+  border-radius: 100px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  white-space: nowrap;
+}
+
+.correction-badge.status-checking {
+  background: rgba(59, 130, 246, 0.12);
+  color: #93c5fd;
+  border-color: rgba(59, 130, 246, 0.24);
+}
+
+.correction-badge.status-checked {
+  background: rgba(148, 163, 184, 0.1);
+  color: var(--text-muted);
+}
+
+.correction-badge.status-corrected {
   background: rgba(34, 197, 94, 0.1);
   color: var(--success);
-  border-radius: 100px;
-  border: 1px solid rgba(34, 197, 94, 0.2);
+  border-color: rgba(34, 197, 94, 0.2);
+}
+
+.correction-badge.status-failed,
+.correction-badge.status-skipped {
+  background: rgba(245, 158, 11, 0.12);
+  color: #fbbf24;
+  border-color: rgba(245, 158, 11, 0.24);
 }
 
 .waveform-area {
@@ -1643,6 +2157,147 @@ body {
   border-color: rgba(34, 197, 94, 0.45);
   background: rgba(34, 197, 94, 0.12);
   color: var(--success);
+}
+
+.floating-subtitle-overlay {
+  position: fixed;
+  left: 50%;
+  bottom: 92px;
+  z-index: 80;
+  width: min(920px, calc(100vw - 48px));
+  max-height: 48vh;
+  transform: translateX(-50%);
+  display: flex;
+  justify-content: center;
+  cursor: move;
+  pointer-events: auto;
+  user-select: none;
+  background: transparent !important;
+  border: 0;
+}
+
+.floating-subtitle-content,
+.floating-subtitle-empty {
+  width: 100%;
+  padding: 0 42px 2px;
+  overflow-y: auto;
+  text-align: center;
+  background: transparent !important;
+  color: var(--text-primary);
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.92), 0 0 2px rgba(0, 0, 0, 0.95);
+}
+
+.floating-subtitle-content {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 10px;
+  max-height: 48vh;
+}
+
+.floating-subtitle-content::-webkit-scrollbar { width: 6px; }
+.floating-subtitle-content::-webkit-scrollbar-track { background: transparent; }
+.floating-subtitle-content::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.45);
+}
+
+.floating-subtitle-row {
+  opacity: 0.94;
+  transition: opacity 0.18s ease;
+}
+
+.floating-subtitle-row.partial {
+  opacity: 0.72;
+}
+
+.floating-subtitle-row.corrected .floating-subtitle-translated {
+  color: #4ade80;
+}
+
+.floating-subtitle-row:not(:last-child) .floating-subtitle-original {
+  font-size: 14px;
+  opacity: 0.72;
+}
+
+.floating-subtitle-row:not(:last-child) .floating-subtitle-translated {
+  font-size: 21px;
+  opacity: 0.82;
+}
+
+.floating-subtitle-original {
+  margin-bottom: 8px;
+  color: rgba(248, 250, 252, 0.92);
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.floating-subtitle-translated {
+  color: var(--success);
+  font-size: 28px;
+  font-weight: 900;
+  line-height: 1.28;
+}
+
+.floating-subtitle-empty {
+  color: rgba(148, 163, 184, 0.82);
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.floating-subtitle-close {
+  position: absolute;
+  top: -28px;
+  right: 0;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  background: transparent;
+  color: rgba(248, 250, 252, 0.82);
+  font-size: 24px;
+  line-height: 28px;
+  cursor: pointer;
+  pointer-events: auto;
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.9);
+}
+
+.floating-subtitle-close:hover {
+  color: #fff;
+}
+
+.subtitle-window-body {
+  background: transparent !important;
+}
+
+.subtitle-window-mode {
+  min-height: 100vh;
+  overflow: hidden;
+  background: transparent !important;
+}
+
+.subtitle-window-mode .floating-subtitle-overlay {
+  left: 0 !important;
+  bottom: 0 !important;
+  width: 100vw;
+  height: 100vh;
+  max-height: 100vh;
+  transform: none;
+  align-items: center;
+  cursor: move;
+  -webkit-app-region: drag;
+}
+
+.subtitle-window-mode .floating-subtitle-content,
+.subtitle-window-mode .floating-subtitle-empty {
+  max-height: 100vh;
+  padding: 10px 42px 12px;
+}
+
+.subtitle-window-mode .floating-subtitle-close {
+  top: 6px;
+  right: 8px;
+  -webkit-app-region: no-drag;
 }
 
 .mini-action-btn {

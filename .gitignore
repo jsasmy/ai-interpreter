@@ -4,6 +4,8 @@ frontend/node_modules/
 # Build outputs
 frontend/dist/
 frontend/.vite/
+frontend/release/
+frontend/dist-electron/
 dist/
 build/
 
@@ -31,11 +33,17 @@ backend/.env
 !backend/.env.example
 
 # Logs
+logs/
 *.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+
+# Temporary extracted app artifacts
+.tmp_external_app.asar
+.tmp_external_app_extract/
+.tmp_video/
 
 # Editor and OS files
 .idea/

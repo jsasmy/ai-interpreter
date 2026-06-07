@@ -22,8 +22,22 @@ class Settings(BaseSettings):
 
     DASHSCOPE_API_KEY: str = ""
     DASHSCOPE_REALTIME_URL: str = "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
-    DASHSCOPE_LIVETRANSLATE_MODEL: str = "qwen3.5-livetranslate-flash-realtime-2026-05-19"
+    DASHSCOPE_COMPATIBLE_BASE_URL: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    DASHSCOPE_LIVETRANSLATE_MODEL: str = "qwen3.5-livetranslate-flash-realtime"
+    DASHSCOPE_SECOND_LIVETRANSLATE_MODEL: str = "qwen3.5-livetranslate-flash-realtime"
     DASHSCOPE_ASR_MODEL: str = "qwen3-asr-flash-realtime"
+    DASHSCOPE_TEXT_MODEL: str = "qwen-flash"
+    DASHSCOPE_REPAIR_MODEL: str = "qwen-plus-latest"
+    ENABLE_SECOND_E2E: bool = False
+    LIVETRANSLATE_SILENCE_DURATION_MS: int = 480
+    SECOND_E2E_SILENCE_DURATION_MS: int = 300
+    ENABLE_ASR_FALLBACK: bool = False
+    ASR_FALLBACK_TRANSLATE: bool = False
+    AUDIO_REPLAY_SECONDS: float = 2.0
+    DEBUG_REALTIME_EVENTS: bool = False
+    ENABLE_CONTEXTUAL_REPAIR: bool = True
+    CONTEXTUAL_REPAIR_MAX_CHARS: int = 260
+    CONTEXTUAL_REPAIR_WINDOW_SIZE: int = 3
 
     SOURCE_LANG: str = "en"
     TARGET_LANG: str = "zh"

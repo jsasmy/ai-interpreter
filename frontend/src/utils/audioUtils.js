@@ -1,33 +1,13 @@
-export function encodeWAV(samples, sampleRate) {
-  const buffer = new ArrayBuffer(44 + samples.length * 2)
+export function float32ToPcm16Buffer(samples) {
+  const buffer = new ArrayBuffer(samples.length * 2)
   const view = new DataView(buffer)
 
-  writeString(view, 0, 'RIFF')
-  view.setUint32(4, 36 + samples.length * 2, true)
-  writeString(view, 8, 'WAVE')
-  writeString(view, 12, 'fmt ')
-  view.setUint32(16, 16, true)
-  view.setUint16(20, 1, true)
-  view.setUint16(22, 1, true)
-  view.setUint32(24, sampleRate, true)
-  view.setUint32(28, sampleRate * 2, true)
-  view.setUint16(32, 2, true)
-  view.setUint16(34, 16, true)
-  writeString(view, 36, 'data')
-  view.setUint32(40, samples.length * 2, true)
-
-  for (let i = 0, offset = 44; i < samples.length; i++, offset += 2) {
+  for (let i = 0, offset = 0; i < samples.length; i++, offset += 2) {
     const s = Math.max(-1, Math.min(1, samples[i]))
     view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true)
   }
 
-  return new Blob([buffer], { type: 'audio/wav' })
-}
-
-function writeString(view, offset, string) {
-  for (let i = 0; i < string.length; i++) {
-    view.setUint8(offset + i, string.charCodeAt(i))
-  }
+  return buffer
 }
 
 function calculateRMS(samples) {
@@ -85,13 +65,28 @@ export class WavRecorder {
   async _startWithWorklet() {
     const workletCode = `
       class RecorderProcessor extends AudioWorkletProcessor {
-        constructor() {
+        constructor(options) {
           super()
+          this.outputPcm = Boolean(options.processorOptions?.outputPcm)
+          this.targetSampleRate = options.processorOptions?.targetSampleRate || 16000
+          this.inputSampleRate = sampleRate
         }
         process(inputs) {
           const input = inputs[0]
           if (input && input[0]) {
-            this.port.postMessage(input[0])
+            if (this.outputPcm) {
+              const ratio = this.inputSampleRate / this.targetSampleRate
+              const outputLength = Math.floor(input[0].length / ratio)
+              const pcm = new Int16Array(outputLength)
+              for (let index = 0; index < outputLength; index += 1) {
+                const sampleIndex = Math.floor(index * ratio)
+                const sample = Math.max(-1, Math.min(1, input[0][sampleIndex]))
+                pcm[index] = sample < 0 ? sample * 0x8000 : sample * 0x7FFF
+              }
+              this.port.postMessage({ type: 'pcm', buffer: pcm.buffer }, [pcm.buffer])
+            } else {
+              this.port.postMessage(input[0])
+            }
           }
           return true
         }
@@ -103,12 +98,21 @@ export class WavRecorder {
     await this.audioContext.audioWorklet.addModule(url)
     URL.revokeObjectURL(url)
 
-    this.processor = new AudioWorkletNode(this.audioContext, 'recorder-processor')
+    this.processor = new AudioWorkletNode(this.audioContext, 'recorder-processor', {
+      processorOptions: {
+        outputPcm: this.continuous,
+        targetSampleRate: this.sampleRate
+      }
+    })
     this.source.connect(this.processor)
     this.processor.connect(this.audioContext.destination)
 
     this.processor.port.onmessage = (e) => {
-      this._processAudioData(e.data)
+      if (this.continuous && e.data?.type === 'pcm') {
+        this.onAudioData?.(e.data.buffer)
+      } else {
+        this._processAudioData(e.data)
+      }
     }
   }
 
@@ -128,9 +132,9 @@ export class WavRecorder {
       this.buffer.push(...data)
       while (this.buffer.length >= this.bufferSize) {
         const chunk = this.buffer.splice(0, this.bufferSize)
-        const wavBlob = encodeWAV(new Float32Array(chunk), this.sampleRate)
+        const pcmBuffer = float32ToPcm16Buffer(new Float32Array(chunk))
         if (this.onAudioData) {
-          this.onAudioData(wavBlob)
+          this.onAudioData(pcmBuffer)
         }
       }
       return
@@ -163,9 +167,9 @@ export class WavRecorder {
             if (this.buffer.length > 0) {
               const float32 = new Float32Array(this.buffer)
               this.buffer = []
-              const wavBlob = encodeWAV(float32, this.sampleRate)
+              const pcmBuffer = float32ToPcm16Buffer(float32)
               if (this.onAudioData) {
-                this.onAudioData(wavBlob)
+                this.onAudioData(pcmBuffer)
               }
             }
           }, this.maxSilenceMs)
@@ -176,9 +180,9 @@ export class WavRecorder {
     if (this.buffer.length >= this.bufferSize && this.isSpeaking) {
       const chunk = this.buffer.splice(0, this.bufferSize)
       const float32 = new Float32Array(chunk)
-      const wavBlob = encodeWAV(float32, this.sampleRate)
+      const pcmBuffer = float32ToPcm16Buffer(float32)
       if (this.onAudioData) {
-        this.onAudioData(wavBlob)
+        this.onAudioData(pcmBuffer)
       }
     }
   }

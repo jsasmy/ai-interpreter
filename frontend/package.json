@@ -1,6 +1,8 @@
 {
   "name": "ai-interpreter-frontend",
   "version": "2.0.0",
+  "description": "Realtime speech translation desktop app powered by DashScope LiveTranslate.",
+  "author": "jsasmy",
   "private": true,
   "type": "module",
   "main": "electron/main.cjs",
@@ -8,7 +10,44 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "desktop:dev": "electron ."
+    "desktop:dev": "electron .",
+    "pack:win": "npm run build && electron-builder --win --dir",
+    "dist:win": "npm run build && electron-builder --win nsis"
+  },
+  "build": {
+    "appId": "com.aiinterpreter.desktop",
+    "productName": "AI Interpreter",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../backend",
+        "to": "backend",
+        "filter": [
+          "**/*",
+          "!**/.env",
+          "!**/__pycache__/**",
+          "!**/*.pyc",
+          "!**/.venv/**",
+          "!**/venv/**"
+        ]
+      }
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
   },
   "dependencies": {
     "@element-plus/icons-vue": "^2.3.1",
@@ -19,6 +58,7 @@
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.0.0",
     "electron": "^41.3.0",
+    "electron-builder": "^26.15.0",
     "vite": "^5.0.0"
   }
 }

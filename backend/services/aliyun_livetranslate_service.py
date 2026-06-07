@@ -10,15 +10,20 @@ from urllib.parse import urlencode
 import websockets
 
 from config import settings
+from services.dashscope_text_service import dashscope_text_translator
 
 logger = logging.getLogger(__name__)
 
 debug_logger = logging.getLogger("aliyun_livetranslate")
-if not debug_logger.handlers:
+if settings.DEBUG_REALTIME_EVENTS and not debug_logger.handlers:
     handler = logging.FileHandler("aliyun_livetranslate.log", encoding="utf-8")
     handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
     debug_logger.addHandler(handler)
     debug_logger.setLevel(logging.INFO)
+    debug_logger.propagate = False
+elif not settings.DEBUG_REALTIME_EVENTS:
+    debug_logger.addHandler(logging.NullHandler())
+    debug_logger.setLevel(logging.WARNING)
     debug_logger.propagate = False
 
 
@@ -45,22 +50,6 @@ LANGUAGE_MAP = {
 }
 
 
-def wav_to_pcm_bytes(audio_data: bytes) -> bytes:
-    if audio_data[:4] != b"RIFF" or audio_data[8:12] != b"WAVE":
-        return audio_data
-
-    offset = 12
-    while offset + 8 <= len(audio_data):
-        chunk_id = audio_data[offset:offset + 4]
-        chunk_size = int.from_bytes(audio_data[offset + 4:offset + 8], "little")
-        data_start = offset + 8
-        data_end = data_start + chunk_size
-        if chunk_id == b"data":
-            return audio_data[data_start:data_end]
-        offset = data_end + (chunk_size % 2)
-    return audio_data
-
-
 def normalize_lang(lang: str, *, is_target: bool = False) -> str:
     normalized = LANGUAGE_MAP.get((lang or "auto").lower(), "auto")
     if is_target and normalized == "auto":
@@ -69,8 +58,18 @@ def normalize_lang(lang: str, *, is_target: bool = False) -> str:
 
 
 class AliyunLiveTranslateSession:
-    def __init__(self, send_to_client: Callable[[dict], Awaitable[None]]):
+    def __init__(
+        self,
+        send_to_client: Callable[[dict], Awaitable[None]],
+        *,
+        model: str | None = None,
+        source_name: str = "livetranslate",
+        silence_duration_ms: int = 430,
+    ):
         self.send_to_client = send_to_client
+        self.model = model or settings.DASHSCOPE_LIVETRANSLATE_MODEL
+        self.source_name = source_name
+        self.silence_duration_ms = silence_duration_ms
         self.ws = None
         self.receiver_task: Optional[asyncio.Task] = None
         self.source_lang = "auto"
@@ -80,11 +79,15 @@ class AliyunLiveTranslateSession:
         self.original_by_item: dict[str, str] = {}
         self.translated_by_item: dict[str, str] = {}
         self.completed_items: set[str] = set()
+        self.completed_segments: list[dict] = []
+        self.repair_tasks: set[asyncio.Task] = set()
+        self.latest_repair_task: Optional[asyncio.Task] = None
+        self.synthetic_item_counter = 0
         self.started = False
 
     @property
     def url(self) -> str:
-        query = urlencode({"model": settings.DASHSCOPE_LIVETRANSLATE_MODEL})
+        query = urlencode({"model": self.model})
         return f"{settings.DASHSCOPE_REALTIME_URL}?{query}"
 
     async def connect(self, source_lang: str = "auto", target_lang: str = "zh"):
@@ -101,8 +104,9 @@ class AliyunLiveTranslateSession:
         self.receiver_task = asyncio.create_task(self._receive_loop())
         await self._send_session_update()
         debug_logger.info(
-            "connected model=%s source=%s target=%s",
-            settings.DASHSCOPE_LIVETRANSLATE_MODEL,
+            "connected model=%s stream=%s source=%s target=%s",
+            self.model,
+            self.source_name,
             self.source_lang,
             self.target_lang,
         )
@@ -122,7 +126,7 @@ class AliyunLiveTranslateSession:
         if not self.ws:
             return
 
-        pcm_data = wav_to_pcm_bytes(audio_data)
+        pcm_data = audio_data
         if not pcm_data:
             return
 
@@ -140,6 +144,8 @@ class AliyunLiveTranslateSession:
                 await self.receiver_task
             except asyncio.CancelledError:
                 pass
+        for task in list(self.repair_tasks):
+            task.cancel()
         if self.ws:
             try:
                 await self.ws.close()
@@ -166,9 +172,9 @@ class AliyunLiveTranslateSession:
                 },
                 "turn_detection": {
                     "type": "server_vad",
-                    "threshold": 0.12,
-                    "prefix_padding_ms": 420,
-                    "silence_duration_ms": 520,
+                    "threshold": 0.10,
+                    "prefix_padding_ms": 380,
+                    "silence_duration_ms": self.silence_duration_ms,
                 },
             },
         }
@@ -189,7 +195,8 @@ class AliyunLiveTranslateSession:
 
     async def _handle_server_event(self, event: dict):
         event_type = event.get("type", "")
-        debug_logger.info("server_event type=%s keys=%s", event_type, ",".join(event.keys()))
+        if settings.DEBUG_REALTIME_EVENTS:
+            debug_logger.info("server_event type=%s keys=%s", event_type, ",".join(event.keys()))
         if event_type == "error":
             error = event.get("error") or {}
             await self.send_to_client({
@@ -269,7 +276,9 @@ class AliyunLiveTranslateSession:
                 self.latest_translated = translated
                 if response_item_id:
                     self.translated_by_item[response_item_id] = translated
-            await self._send_subtitle("final", response_item_id)
+            subtitle = await self._send_subtitle("final", response_item_id)
+            if subtitle:
+                self._schedule_contextual_repair(subtitle)
             if response_item_id:
                 self.completed_items.add(response_item_id)
                 self.original_by_item.pop(response_item_id, None)
@@ -291,7 +300,10 @@ class AliyunLiveTranslateSession:
                 item_id,
                 len(original or ""),
             )
-            return
+            return None
+        if message_type == "final" and not item_id:
+            self.synthetic_item_counter += 1
+            item_id = f"synthetic_{self.synthetic_item_counter}"
         debug_logger.info(
             "send_subtitle type=%s item=%s original_len=%s translated_len=%s translated=%r",
             message_type,
@@ -300,14 +312,215 @@ class AliyunLiveTranslateSession:
             len(translated or ""),
             translated[:80],
         )
+        content = {
+            "segment_id": item_id,
+            "item_id": item_id,
+            "original": original,
+            "translated": translated,
+            "timestamp": datetime.now().isoformat(),
+            "source": self.source_name,
+            "model": self.model,
+        }
         await self.send_to_client({
-            "type": message_type,
-            "content": {
-                "original": original,
+            "type": "subtitle_delta" if message_type == "partial" else "subtitle",
+            "content": content,
+        })
+        return content
+
+    def _schedule_contextual_repair(self, current: dict):
+        self.completed_segments.append(current)
+        max_history = max(24, settings.CONTEXTUAL_REPAIR_WINDOW_SIZE * 3)
+        if len(self.completed_segments) > max_history:
+            self.completed_segments = self.completed_segments[-max_history:]
+
+        if (
+            not settings.ENABLE_CONTEXTUAL_REPAIR
+            or self.source_name != "livetranslate"
+        ):
+            asyncio.create_task(self._send_repair_status(current, "skipped", "repair_disabled_or_non_primary_stream"))
+            return
+
+        window = self._build_repair_window()
+        if not window:
+            asyncio.create_task(self._send_repair_status(current, "skipped", "no_repair_window"))
+            return
+
+        asyncio.create_task(self._send_repair_status(current, "checking"))
+        task = asyncio.create_task(self._repair_context_window(window))
+        self.latest_repair_task = task
+        self.repair_tasks.add(task)
+        task.add_done_callback(self.repair_tasks.discard)
+
+    def _build_repair_window(self) -> list[dict]:
+        window: list[dict] = []
+        total_chars = 0
+        max_rows = max(2, settings.CONTEXTUAL_REPAIR_WINDOW_SIZE)
+
+        for segment in reversed(self.completed_segments):
+            original = (segment.get("original") or "").strip()
+            translated = (segment.get("translated") or "").strip()
+            if not original or not translated:
+                continue
+            next_total = total_chars + len(original)
+            if window and next_total > settings.CONTEXTUAL_REPAIR_MAX_CHARS:
+                break
+            window.append(segment.copy())
+            total_chars = next_total
+            if len(window) >= max_rows:
+                break
+
+        window.reverse()
+        return window
+
+    async def _repair_context_window(self, window: list[dict]):
+        target_segment_id = ""
+        if window:
+            target_segment_id = window[-1].get("segment_id") or window[-1].get("item_id") or ""
+        try:
+            result = await dashscope_text_translator.repair_context_window(
+                window,
+                self.source_lang,
+                self.target_lang,
+            )
+        except asyncio.CancelledError:
+            return
+        replacements = []
+        segment_by_id = {
+            (segment.get("segment_id") or segment.get("item_id")): segment
+            for segment in self.completed_segments
+        }
+        target_segment = segment_by_id.get(target_segment_id)
+        if result.get("status") == "failed":
+            if target_segment:
+                await self._send_repair_status(target_segment, "failed", result.get("error", "repair_failed"))
+            return
+        for replacement in result.get("replacements") or []:
+            segment_id = replacement.get("segment_id") or replacement.get("item_id")
+            if segment_id != target_segment_id:
+                continue
+            translated = replacement.get("translated", "")
+            segment = segment_by_id.get(segment_id)
+            if not segment or not translated:
+                continue
+            if self._same_text(translated, segment.get("translated", "")):
+                continue
+            replacements.append({
+                "segment_id": segment.get("segment_id"),
+                "item_id": segment.get("item_id"),
+                "original": segment.get("original", ""),
                 "translated": translated,
+            })
+            segment["translated"] = translated
+
+        if replacements:
+            await self.send_to_client({
+                "type": "correction",
+                "content": {
+                    "source": "contextual_window_repair",
+                    "status": "corrected",
+                    "replacements": replacements,
+                    "timestamp": datetime.now().isoformat(),
+                },
+            })
+        elif target_segment:
+            await self._send_repair_status(target_segment, "checked")
+
+    async def _send_repair_status(self, segment: dict, status: str, reason: str = ""):
+        segment_id = segment.get("segment_id") or segment.get("item_id")
+        if not segment_id:
+            return
+        await self.send_to_client({
+            "type": "correction_status",
+            "content": {
+                "segment_id": segment_id,
+                "item_id": segment_id,
+                "status": status,
+                "reason": reason,
                 "timestamp": datetime.now().isoformat(),
             },
         })
+
+    def _can_repair_pair(self, previous: dict, current: dict) -> bool:
+        previous_original = previous.get("original", "")
+        current_original = current.get("original", "")
+        previous_translated = previous.get("translated", "")
+        current_translated = current.get("translated", "")
+        total_chars = len(previous_original) + len(current_original)
+        return (
+            bool(previous_original.strip())
+            and bool(current_original.strip())
+            and bool(previous_translated.strip())
+            and bool(current_translated.strip())
+            and total_chars <= settings.CONTEXTUAL_REPAIR_MAX_CHARS
+        )
+        if (
+            not previous_translated
+            or not current_translated
+            or total_chars > settings.CONTEXTUAL_REPAIR_MAX_CHARS
+        ):
+            return False
+
+        current_start = current_original.strip().lower()
+        previous_end = previous_original.strip()[-1:] if previous_original.strip() else ""
+        link_prefixes = (
+            "and ", "but ", "so ", "because ", "which ", "that ", "then ",
+            "therefore ", "however ", "it ", "they ", "this ", "these ",
+            "those ", "he ", "she ", "we ", "you ", "also ", "as ", "when ",
+            "while ", "if ", "where ", "who ",
+            "这", "那", "而", "但", "所以", "因为", "然后", "并且", "它", "他们",
+            "他", "她", "我们", "你们", "也", "还", "如果", "当", "其中",
+        )
+        terminal_chars = ".?!;。！？；"
+        if previous_end and previous_end not in terminal_chars:
+            return True
+        if any(current_start.startswith(prefix) for prefix in link_prefixes):
+            return True
+        if current_start[:1].islower():
+            return True
+        return len(current_original.strip()) <= 48
+
+    async def _repair_context_pair(self, previous: dict, current: dict, context: list[dict] | None = None):
+        result = await dashscope_text_translator.repair_context_pair(
+            previous.get("original", ""),
+            previous.get("translated", ""),
+            current.get("original", ""),
+            current.get("translated", ""),
+            self.source_lang,
+            self.target_lang,
+            context_segments=context or [],
+        )
+        previous_fixed = result.get("previous_translated", "")
+        current_fixed = result.get("current_translated", "")
+        replacements = []
+        if previous_fixed and not self._same_text(previous_fixed, previous.get("translated", "")):
+            replacements.append({
+                "segment_id": previous.get("segment_id"),
+                "item_id": previous.get("item_id"),
+                "original": previous.get("original", ""),
+                "translated": previous_fixed,
+            })
+            previous["translated"] = previous_fixed
+        if current_fixed and not self._same_text(current_fixed, current.get("translated", "")):
+            replacements.append({
+                "segment_id": current.get("segment_id"),
+                "item_id": current.get("item_id"),
+                "original": current.get("original", ""),
+                "translated": current_fixed,
+            })
+            current["translated"] = current_fixed
+        if replacements:
+            await self.send_to_client({
+                "type": "correction",
+                "content": {
+                    "source": "contextual_repair",
+                    "replacements": replacements,
+                    "timestamp": datetime.now().isoformat(),
+                },
+            })
+
+    @staticmethod
+    def _same_text(left: str, right: str) -> bool:
+        return " ".join((left or "").split()) == " ".join((right or "").split())
 
     @staticmethod
     def _extract_text(event: dict, keys: tuple[str, ...]) -> str:

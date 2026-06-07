@@ -52,10 +52,12 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
     from services.asr_service import asr_service
+    from services.dashscope_text_service import dashscope_text_translator
     from services.translate_service import translate_service
     
     await asr_service.close()
     await translate_service.close()
+    await dashscope_text_translator.close()
     logger.info("服务已关闭")
 
 

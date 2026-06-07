@@ -1,22 +1,31 @@
 # AI Interpreter
 
-实时语音翻译测试版。当前主路径使用阿里云百炼 DashScope 的 Qwen3.5 LiveTranslate 实时同传模型，支持麦克风和桌面音频输入，并提供独立字幕窗口。
+AI Interpreter 是一个实时同声传译桌面应用。当前主链路使用阿里云百炼 DashScope 的 Qwen LiveTranslate 实时同传模型，支持麦克风、桌面音频捕获、透明字幕窗口、上下文纠错和字幕导出。
 
-## 当前能力
+## 演示
 
-- 麦克风实时语音翻译
-- 桌面音频捕获，用于识别浏览器视频、会议或系统播放声音
-- 源语言、目标语言、输入源下拉切换
-- 独立字幕窗口，支持在应用页面外显示字幕
-- CSV 字幕导出
+<video src="docs/demo.mp4" controls width="100%"></video>
+
+如果 GitHub 页面没有自动播放控件，也可以直接打开 [docs/demo.mp4](docs/demo.mp4) 查看演示。
+
+## 主要功能
+
+- 实时语音识别与翻译：支持英文等源语言到中文等目标语言的实时同传。
+- 麦克风输入：直接使用本机麦克风进行实时翻译。
+- 桌面音频输入：Electron 桌面版可捕获系统/浏览器/视频会议声音。
+- 透明置顶字幕：字幕可脱离主窗口显示在视频或会议窗口上方。
+- 上下文纠错：后台使用最近上下文修正字幕，并显示 `检查中`、`无需修正`、`已修正`、`纠错失败`、`已跳过` 等状态。
+- 最近字幕保留：主界面保留最近字幕记录，便于回看。
+- CSV 导出：可导出原文、译文和时间戳。
+- Electron 自动拉起服务：桌面开发模式会自动启动后端和前端开发服务器。
 
 ## 技术栈
 
-- Frontend: Vue 3, Vite, Element Plus, WebSocket
-- Desktop shell: Electron
-- Backend: FastAPI, WebSocket, websockets
-- Realtime model: `qwen3.5-livetranslate-flash-realtime-2026-05-19`
-- ASR model: `qwen3-asr-flash-realtime`
+- Frontend: Vue 3, Vite, Element Plus
+- Desktop: Electron
+- Backend: FastAPI, WebSocket
+- Realtime translation: DashScope LiveTranslate
+- Context repair: DashScope compatible chat model
 
 ## 项目结构
 
@@ -24,12 +33,7 @@
 ai-interpreter/
   backend/
     api/
-      websocket.py
     services/
-      aliyun_livetranslate_service.py
-      asr_service.py
-      translate_service.py
-      correction_service.py
     config.py
     main.py
     requirements.txt
@@ -37,106 +41,74 @@ ai-interpreter/
   frontend/
     electron/
       main.cjs
+      preload.cjs
     src/
-      App.vue
-      main.js
-      utils/audioUtils.js
     package.json
+  docs/
+    demo.mp4
+  launcher.py
+  README.md
 ```
 
-## 环境配置
+## 环境要求
 
-先准备 Python、Node.js 和 npm，然后复制示例文件并填写自己的 DashScope 密钥：
+- Windows 10/11
+- Python 3.10+
+- Node.js 18+
+- npm
+- DashScope API Key
+
+桌面音频捕获和透明置顶字幕建议使用 Electron 桌面版；普通浏览器版主要用于前端调试。
+
+## 配置
+
+复制后端环境变量示例：
 
 ```powershell
 Copy-Item backend\.env.example backend\.env
 ```
 
-最小配置：
+编辑 `backend\.env`，至少配置：
 
 ```env
 TRANSLATION_PROVIDER=aliyun_livetranslate
 DASHSCOPE_API_KEY=your_dashscope_api_key_here
-DASHSCOPE_LIVETRANSLATE_MODEL=qwen3.5-livetranslate-flash-realtime-2026-05-19
+DASHSCOPE_LIVETRANSLATE_MODEL=qwen3.5-livetranslate-flash-realtime
 DASHSCOPE_ASR_MODEL=qwen3-asr-flash-realtime
+DASHSCOPE_REPAIR_MODEL=qwen-plus-latest
+ENABLE_CONTEXTUAL_REPAIR=true
 ```
 
-不要提交真实 `.env` 或 API Key。
+不要提交真实的 `.env`、API Key、Token 或账号密码。
 
-## 本地启动
+## 安装依赖
 
-推荐使用两个 PowerShell 终端分别启动后端和前端。
-
-### 1. 安装依赖
-
-后端依赖：
+后端：
 
 ```powershell
 cd backend
 pip install -r requirements.txt
 ```
 
-前端依赖：
+前端：
 
 ```powershell
 cd frontend
 npm install
 ```
 
-### 2. 启动后端
+## 启动方式
 
-在项目根目录执行：
+### 方式一：Electron 桌面版
 
-```powershell
-cd backend
-python main.py
-```
-
-看到后端监听 `9000` 端口后保持该终端不要关闭。
-
-### 3. 启动前端
-
-另开一个 PowerShell，在项目根目录执行：
-
-```powershell
-cd frontend
-npm run dev
-```
-
-然后打开前端地址。
-
-默认地址：
-
-- Frontend: http://127.0.0.1:3001
-- Backend: http://127.0.0.1:9000
-- API docs: http://127.0.0.1:9000/docs
-
-### 可选：使用启动器
-
-仓库根目录有一个简易启动器：
-
-```powershell
-python launcher.py
-```
-
-它会尝试启动后端和前端，并打开浏览器。这个启动器仍然是浏览器版本，不是桌面客户端。
-
-## Electron 桌面版启动
-
-桌面版入口位于 `frontend/electron/main.cjs`。它会自动启动：
-
-- FastAPI 后端：http://127.0.0.1:9000
-- Vite 前端：http://127.0.0.1:3001
-- Electron 应用窗口
-
-启动方式：
+推荐日常使用这种方式。Electron 会自动启动后端和 Vite 前端服务。
 
 ```powershell
 cd frontend
 npm run desktop:dev
 ```
 
-如果系统里的 `python` 不是项目要用的 Python，可以显式指定：
+如果系统默认 `python` 不是已经安装依赖的 Python，可以显式指定：
 
 ```powershell
 $env:PYTHON_PATH="E:\anacodna\python.exe"
@@ -144,21 +116,84 @@ cd frontend
 npm run desktop:dev
 ```
 
-桌面版会拦截页面里的桌面音频捕获请求，在 Windows 上优先使用 Electron 的 system audio loopback。也就是说，Input 选择 `桌面音频` 后，采集路径会比普通浏览器版更接近桌面客户端。
+默认服务：
+
+- Frontend: `http://127.0.0.1:3001`
+- Backend: `http://127.0.0.1:9000`
+
+### 方式二：手动启动后端和前端
+
+第一个终端启动后端：
+
+```powershell
+cd backend
+python -m uvicorn main:app --host 0.0.0.0 --port 9000
+```
+
+第二个终端启动前端：
+
+```powershell
+cd frontend
+npm run dev -- --host 127.0.0.1 --port 3001
+```
+
+浏览器打开：
+
+```text
+http://127.0.0.1:3001
+```
+
+### 方式三：简易启动器
+
+仓库根目录可运行：
+
+```powershell
+python launcher.py
+```
 
 ## 使用说明
 
-1. 打开前端页面。
-2. 在底部选择 Source、Target 和 Input。
-3. Input 选择 `麦克风` 时，点击底部录音按钮开始麦克风识别。
-4. Input 选择 `桌面音频` 时，点击开始后在浏览器共享窗口中选择标签页或屏幕，并勾选共享音频。
-5. 主页面右下角的 `字幕开/字幕关` 用于手动打开或关闭独立字幕窗口。
-6. 设置里的 `识别时自动打开字幕` 控制开始识别时是否自动弹出独立字幕窗口。
+1. 打开应用。
+2. 在底部选择 `Source`、`Target` 和 `Input`。
+3. `Input` 选择 `麦克风` 时，点击底部录音按钮开始实时翻译。
+4. `Input` 选择 `桌面音频` 时，Electron 版会优先捕获桌面/系统音频。
+5. 点击右下角 `字幕开/字幕关` 可打开或关闭透明字幕窗口。
+6. 设置中的 `识别时自动打开字幕` 控制开始识别时是否自动打开透明字幕。
+7. 主界面会显示纠错状态，方便判断字幕是否已检查、已修正或失败。
+8. 可点击 `导出` 保存 CSV 字幕记录。
 
-当前版本暂时只保留麦克风和桌面音频实时识别，不包含文件上传或 URL 链接翻译入口。
+## 打包 Windows 版本
 
-## 当前测试版说明
+生成未安装目录版：
 
-- 这是实时同传测试版本，重点验证 Qwen3.5 LiveTranslate 的端到端识别和翻译体验。
-- 音频分片已调到较低延迟，后端 VAD 也做了更快的句尾判定。
-- 过短停顿可能被切成两句；如果后续需要更稳定长句，可适当增加 VAD 静音等待时间。
+```powershell
+cd frontend
+npm run pack:win
+```
+
+输出目录：
+
+```text
+frontend/release/win-unpacked/
+```
+
+生成安装包：
+
+```powershell
+cd frontend
+npm run dist:win
+```
+
+输出目录：
+
+```text
+frontend/release/
+```
+
+注意：当前打包版本仍需要目标机器有可用 Python 环境，并安装 `backend/requirements.txt` 中的依赖。可以通过系统 `python` 或 `PYTHON_PATH` 指向对应 Python。
+
+## 开发备注
+
+- `backend/.env` 已被忽略，不要提交真实密钥。
+- `frontend/dist/`、`frontend/release/`、日志和临时文件不会提交。
+- 大文件请优先放 GitHub Releases；README 中的演示视频已压缩为适合仓库展示的小体积 mp4。

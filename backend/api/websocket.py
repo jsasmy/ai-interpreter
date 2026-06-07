@@ -4,13 +4,16 @@ from typing import List, Dict, Optional
 import json
 import asyncio
 import logging
+from collections import deque
 from time import perf_counter
 from datetime import datetime
 
 from services.asr_service import asr_service
 from services.translate_service import translate_service
 from services.correction_service import correction_service
+from services.aliyun_asr_realtime_service import AliyunAsrRealtimeSession
 from services.aliyun_livetranslate_service import AliyunLiveTranslateSession
+from services.dashscope_text_service import dashscope_text_translator
 from services.xiaomi_api import xiaomi_client
 from config import settings
 
@@ -128,7 +131,15 @@ async def get_status():
             "api_configured": bool(settings.DASHSCOPE_API_KEY),
             "models": {
                 "livetranslate": settings.DASHSCOPE_LIVETRANSLATE_MODEL,
+                "second_livetranslate": settings.DASHSCOPE_SECOND_LIVETRANSLATE_MODEL,
                 "asr": settings.DASHSCOPE_ASR_MODEL,
+                "fallback_text": settings.DASHSCOPE_TEXT_MODEL,
+            },
+            "fallback": {
+                "second_e2e_enabled": settings.ENABLE_SECOND_E2E,
+                "asr_enabled": settings.ENABLE_ASR_FALLBACK,
+                "translate_enabled": settings.ASR_FALLBACK_TRANSLATE,
+                "audio_replay_seconds": settings.AUDIO_REPLAY_SECONDS,
             }
         }
 
@@ -159,43 +170,183 @@ async def check_xiaomi_asr():
 async def translate_websocket(websocket: WebSocket):
     await manager.connect(websocket)
     live_session = None
+    second_live_session = None
+    asr_session = None
+    fallback_tasks: set[asyncio.Task] = set()
+    send_lock = asyncio.Lock()
+    audio_ring_buffer = deque()
+    audio_ring_bytes = 0
+    max_ring_bytes = max(32000, int(16000 * 2 * settings.AUDIO_REPLAY_SECONDS))
+
+    def remember_audio(audio_data: bytes):
+        nonlocal audio_ring_bytes
+        audio_ring_buffer.append(audio_data)
+        audio_ring_bytes += len(audio_data)
+        while audio_ring_bytes > max_ring_bytes and audio_ring_buffer:
+            audio_ring_bytes -= len(audio_ring_buffer.popleft())
+
+    async def replay_recent_audio(*sessions):
+        if not audio_ring_buffer:
+            return
+        chunks = list(audio_ring_buffer)
+        for session in sessions:
+            if not session:
+                continue
+            for chunk in chunks:
+                await session.send_audio(chunk)
+
+    def track_task(task: asyncio.Task):
+        fallback_tasks.add(task)
+        task.add_done_callback(fallback_tasks.discard)
+        return task
+
+    async def safe_send_json(message: dict):
+        async with send_lock:
+            await websocket.send_json(message)
 
     if settings.TRANSLATION_PROVIDER == "aliyun_livetranslate":
         async def send_to_client(message: dict):
-            await websocket.send_json(message)
+            await safe_send_json(message)
 
-        async def start_live_session():
+        async def send_asr_fallback(message: dict):
+            await safe_send_json(message)
+            if (
+                not settings.ASR_FALLBACK_TRANSLATE
+                or message.get("type") != "asr_final"
+                or not message.get("content", {}).get("original")
+            ):
+                return
+
+            content = message["content"]
+
+            async def translate_and_send():
+                ws_settings = manager.get_settings(websocket)
+                source_lang = ws_settings.get("source_lang", "auto")
+                target_lang = ws_settings.get("target_lang", "zh")
+                result = await dashscope_text_translator.translate(
+                    content["original"],
+                    source_lang,
+                    target_lang,
+                )
+                if result.get("translated"):
+                    await safe_send_json({
+                        "type": "asr_translation",
+                        "content": {
+                            **content,
+                            "translated": result["translated"],
+                            "timestamp": datetime.now().isoformat(),
+                        },
+                    })
+
+            track_task(asyncio.create_task(translate_and_send()))
+
+        async def start_live_session(replay_audio: bool = False):
             nonlocal live_session
             if live_session:
                 await live_session.close()
-            live_session = AliyunLiveTranslateSession(send_to_client)
+            live_session = AliyunLiveTranslateSession(
+                send_to_client,
+                model=settings.DASHSCOPE_LIVETRANSLATE_MODEL,
+                source_name="livetranslate",
+                silence_duration_ms=settings.LIVETRANSLATE_SILENCE_DURATION_MS,
+            )
             ws_settings = manager.get_settings(websocket)
             await live_session.connect(
                 ws_settings.get("source_lang", "auto"),
                 ws_settings.get("target_lang", "zh"),
             )
+            if replay_audio:
+                await replay_recent_audio(live_session)
+
+        async def start_second_live_session(replay_audio: bool = False):
+            nonlocal second_live_session
+            if not settings.ENABLE_SECOND_E2E:
+                return
+            if second_live_session:
+                await second_live_session.close()
+            second_live_session = AliyunLiveTranslateSession(
+                send_to_client,
+                model=settings.DASHSCOPE_SECOND_LIVETRANSLATE_MODEL,
+                source_name="livetranslate_secondary",
+                silence_duration_ms=settings.SECOND_E2E_SILENCE_DURATION_MS,
+            )
+            ws_settings = manager.get_settings(websocket)
+            await second_live_session.connect(
+                ws_settings.get("source_lang", "auto"),
+                ws_settings.get("target_lang", "zh"),
+            )
+            if replay_audio:
+                await replay_recent_audio(second_live_session)
+
+        async def start_asr_session(replay_audio: bool = False):
+            nonlocal asr_session
+            if not settings.ENABLE_ASR_FALLBACK:
+                return
+            if asr_session:
+                await asr_session.close()
+            asr_session = AliyunAsrRealtimeSession(send_asr_fallback)
+            ws_settings = manager.get_settings(websocket)
+            await asr_session.connect(ws_settings.get("source_lang", "auto"))
+            if replay_audio:
+                await replay_recent_audio(asr_session)
 
         async def ensure_live_session():
             nonlocal live_session
             if live_session:
                 return True
             try:
-                await start_live_session()
+                await start_live_session(replay_audio=True)
                 return True
             except Exception as e:
                 logger.error("阿里同传启动失败: %s", e)
                 if live_session:
                     await live_session.close()
                 live_session = None
-                await websocket.send_json({
+                await safe_send_json({
                     "type": "error",
                     "content": {"message": f"阿里同传启动失败: {e}"}
                 })
                 return False
 
+        async def ensure_second_live_session():
+            nonlocal second_live_session
+            if not settings.ENABLE_SECOND_E2E:
+                return False
+            if second_live_session:
+                return True
+            try:
+                await start_second_live_session(replay_audio=True)
+                return True
+            except Exception as e:
+                logger.error("第二端到端同传启动失败: %s", e)
+                if second_live_session:
+                    await second_live_session.close()
+                second_live_session = None
+                return False
+
+        async def ensure_asr_session():
+            nonlocal asr_session
+            if not settings.ENABLE_ASR_FALLBACK:
+                return False
+            if asr_session:
+                return True
+            try:
+                await start_asr_session(replay_audio=True)
+                return True
+            except Exception as e:
+                logger.error("阿里 ASR 旁路启动失败: %s", e)
+                if asr_session:
+                    await asr_session.close()
+                asr_session = None
+                return False
+
     else:
         start_live_session = None
+        start_second_live_session = None
+        start_asr_session = None
         ensure_live_session = None
+        ensure_second_live_session = None
+        ensure_asr_session = None
 
     try:
         while True:
@@ -203,23 +354,47 @@ async def translate_websocket(websocket: WebSocket):
 
             if data["type"] == "websocket.receive":
                 if "bytes" in data:
+                    remember_audio(data["bytes"])
                     if ensure_live_session and await ensure_live_session():
                         await live_session.send_audio(data["bytes"])
+                        if ensure_second_live_session and await ensure_second_live_session():
+                            await second_live_session.send_audio(data["bytes"])
+                        if ensure_asr_session and await ensure_asr_session():
+                            await asr_session.send_audio(data["bytes"])
                     elif not ensure_live_session:
                         asyncio.create_task(handle_audio_data(websocket, data["bytes"]))
                 elif "text" in data:
-                    await handle_text_message(websocket, data["text"], live_session, start_live_session)
+                    await handle_text_message(
+                        websocket,
+                        data["text"],
+                        live_session,
+                        start_live_session,
+                        start_asr_session,
+                        start_second_live_session,
+                    )
 
     except WebSocketDisconnect:
         manager.disconnect(websocket)
         if live_session:
             await live_session.close()
+        if second_live_session:
+            await second_live_session.close()
+        if asr_session:
+            await asr_session.close()
+        for task in list(fallback_tasks):
+            task.cancel()
         logger.info("客户端断开连接")
     except Exception as e:
         logger.error(f"WebSocket错误: {e}")
         manager.disconnect(websocket)
         if live_session:
             await live_session.close()
+        if second_live_session:
+            await second_live_session.close()
+        if asr_session:
+            await asr_session.close()
+        for task in list(fallback_tasks):
+            task.cancel()
 
 
 async def handle_audio_data(websocket: WebSocket, audio_data: bytes):
@@ -319,14 +494,21 @@ async def handle_text_message(
     message: str,
     live_session: AliyunLiveTranslateSession | None = None,
     restart_live_session=None,
+    restart_asr_session=None,
+    restart_second_live_session=None,
 ):
     try:
         data = json.loads(message)
 
-        if data.get("type") == "settings":
-            manager.update_settings(websocket, data.get("data", {}))
+        if data.get("type") in {"settings", "start"}:
+            payload = data.get("data", {}) if data.get("type") == "settings" else data
+            manager.update_settings(websocket, payload)
             if restart_live_session:
-                await restart_live_session()
+                await restart_live_session(replay_audio=False)
+            if restart_second_live_session:
+                await restart_second_live_session(replay_audio=False)
+            if restart_asr_session:
+                await restart_asr_session(replay_audio=False)
             await websocket.send_json({
                 "type": "settings_updated",
                 "content": {"status": "ok"}

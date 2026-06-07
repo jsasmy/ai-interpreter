@@ -2,19 +2,27 @@
 
 AI Interpreter 是一款面向会议、直播、课程和跨语言沟通场景的实时语音同传桌面应用。应用支持麦克风与桌面音频输入，通过后端 WebSocket 管道接入 DashScope LiveTranslate，实现实时识别、翻译、字幕展示、上下文纠错和字幕记录导出。
 
+## 项目信息
+
+- 代码仓库：[https://github.com/jsasmy/ai-interpreter](https://github.com/jsasmy/ai-interpreter)
+- 项目名称：AI Interpreter
+- 当前版本：2.0.0
+- 应用类型：Windows 桌面实时语音同传应用
+- 核心能力：麦克风同传、桌面音频同传、透明字幕窗口、上下文纠错、字幕导出
+
 ## 演示预览
 
 ### 桌面音频示例
 
-<video src="docs/desktop-audio-demo.mp4" controls width="100%"></video>
+[在线播放：桌面音频实时同传演示](https://github.com/jsasmy/ai-interpreter/blob/main/docs/desktop-audio-demo.mp4)
 
-备用链接：[docs/desktop-audio-demo.mp4](docs/desktop-audio-demo.mp4)
+Raw 直链：[docs/desktop-audio-demo.mp4](https://raw.githubusercontent.com/jsasmy/ai-interpreter/main/docs/desktop-audio-demo.mp4)
 
 ### 麦克风示例
 
-<video src="docs/microphone-demo.mp4" controls width="100%"></video>
+[在线播放：麦克风实时同传演示](https://github.com/jsasmy/ai-interpreter/blob/main/docs/microphone-demo.mp4)
 
-备用链接：[docs/microphone-demo.mp4](docs/microphone-demo.mp4)
+Raw 直链：[docs/microphone-demo.mp4](https://raw.githubusercontent.com/jsasmy/ai-interpreter/main/docs/microphone-demo.mp4)
 
 ## 主要功能
 

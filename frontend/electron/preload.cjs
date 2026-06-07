@@ -17,3 +17,11 @@ contextBridge.exposeInMainWorld('electronSubtitles', {
     return () => ipcRenderer.removeListener('subtitle-window:data', listener)
   },
 })
+
+contextBridge.exposeInMainWorld('electronAppConfig', {
+  get: () => ipcRenderer.invoke('app-config:get'),
+  save: (config) => ipcRenderer.invoke('app-config:save', config),
+  clear: () => ipcRenderer.invoke('app-config:clear'),
+  check: (config) => ipcRenderer.invoke('app-config:check', config),
+  restartBackend: () => ipcRenderer.invoke('app-config:restart-backend'),
+})

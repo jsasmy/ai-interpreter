@@ -1,9 +1,11 @@
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 from typing import List, Dict, Optional
 import json
 import asyncio
 import logging
+import httpx
 from collections import deque
 from time import perf_counter
 from datetime import datetime
@@ -19,6 +21,11 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+class RuntimeApiConfig(BaseModel):
+    dashscope_api_key: Optional[str] = None
+    dashscope_livetranslate_model: Optional[str] = None
 
 
 def detect_text_language(text: str) -> str:
@@ -154,6 +161,60 @@ async def get_status():
             "tts": settings.XIAOMI_TTS_MODEL
         }
     }
+
+
+@router.post("/api/runtime-config")
+async def update_runtime_config(config: RuntimeApiConfig):
+    if config.dashscope_api_key is not None:
+        settings.DASHSCOPE_API_KEY = config.dashscope_api_key.strip()
+    if config.dashscope_livetranslate_model is not None:
+        settings.DASHSCOPE_LIVETRANSLATE_MODEL = config.dashscope_livetranslate_model.strip()
+
+    return {
+        "status": "ok",
+        "api_configured": bool(settings.DASHSCOPE_API_KEY),
+        "models": {
+            "livetranslate": settings.DASHSCOPE_LIVETRANSLATE_MODEL,
+            "second_livetranslate": settings.DASHSCOPE_SECOND_LIVETRANSLATE_MODEL,
+            "asr": settings.DASHSCOPE_ASR_MODEL,
+            "fallback_text": settings.DASHSCOPE_TEXT_MODEL,
+        },
+    }
+
+
+@router.post("/api/runtime-config/check")
+async def check_runtime_config(config: RuntimeApiConfig):
+    api_key = (config.dashscope_api_key or settings.DASHSCOPE_API_KEY or "").strip()
+    model = (config.dashscope_livetranslate_model or settings.DASHSCOPE_LIVETRANSLATE_MODEL or "").strip()
+
+    if not api_key:
+        return {"usable": False, "api_configured": False, "message": "未输入 DashScope API Key"}
+    if not model:
+        return {"usable": False, "api_configured": True, "message": "未填写实时模型名称"}
+
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            response = await client.get(
+                f"{settings.DASHSCOPE_COMPATIBLE_BASE_URL.rstrip('/')}/models",
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+        if response.status_code == 200:
+            return {
+                "usable": True,
+                "api_configured": True,
+                "message": "DashScope API Key 可用",
+                "model": model,
+            }
+        if response.status_code in (401, 403):
+            return {"usable": False, "api_configured": True, "message": "DashScope API Key 无效或无权限"}
+        return {
+            "usable": False,
+            "api_configured": True,
+            "message": f"DashScope 检测失败: HTTP {response.status_code}",
+        }
+    except Exception as exc:
+        logger.warning("DashScope API 检测失败: %s", exc)
+        return {"usable": False, "api_configured": True, "message": f"DashScope 检测失败: {exc}"}
 
 
 @router.get("/api/xiaomi/check")

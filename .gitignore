@@ -8,6 +8,9 @@ frontend/release/
 frontend/dist-electron/
 dist/
 build/
+!frontend/build/
+!frontend/build/icon.ico
+!frontend/build/icon.png
 
 # Python caches and virtual environments
 __pycache__/
@@ -54,6 +57,7 @@ pnpm-debug.log*
 Thumbs.db
 
 # Packaged artifacts
+ai同声传译/
 *.zip
 *.tar.gz
 *.rar

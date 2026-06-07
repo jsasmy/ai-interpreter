@@ -246,6 +246,63 @@
           </button>
         </div>
         <div class="drawer-body">
+          <section class="api-config-panel">
+            <div class="api-config-heading">
+              <h4>实时翻译配置</h4>
+              <span class="api-status" :class="{ connected: apiUsable, checking: apiConfig.checking }">
+                {{ apiStatusLabel }}
+              </span>
+            </div>
+            <label class="config-field">
+              <span>DashScope API Key</span>
+              <input
+                v-model.trim="apiConfig.dashscopeApiKey"
+                class="config-input"
+                type="password"
+                autocomplete="off"
+                :placeholder="apiConfig.hasDashscopeApiKey ? '留空保留原密钥' : '请输入 DashScope API Key'"
+              />
+            </label>
+            <label class="config-field">
+              <span>实时模型</span>
+              <input
+                v-model.trim="apiConfig.dashscopeLiveTranslateModel"
+                class="config-input"
+                type="text"
+                autocomplete="off"
+                placeholder="qwen3.5-livetranslate-flash-realtime"
+              />
+            </label>
+            <button
+              class="save-config-btn"
+              type="button"
+              :disabled="apiConfig.saving"
+              @click="saveApiConfig"
+            >
+              {{ apiConfig.saving ? '保存中...' : '保存配置' }}
+            </button>
+            <div class="api-config-actions">
+              <button
+                class="secondary-config-btn"
+                type="button"
+                :disabled="apiConfig.checking || apiConfig.saving"
+                @click="checkApiConfig"
+              >
+                {{ apiConfig.checking ? '检测中...' : '检测可用性' }}
+              </button>
+              <button
+                class="secondary-config-btn danger"
+                type="button"
+                :disabled="apiConfig.saving"
+                @click="clearApiConfig"
+              >
+                清除配置
+              </button>
+            </div>
+            <p class="api-config-note">
+              {{ apiConfig.message || '首次使用必须输入并检测 API Key，应用不会内置任何默认密钥。' }}
+            </p>
+          </section>
           <div class="setting-group">
             <label>智能纠错</label>
             <el-switch v-model="settings.enableCorrection" />
@@ -256,8 +313,8 @@
           </div>
           <div class="setting-group">
             <label>API 状态</label>
-            <span class="api-status" :class="{ connected: apiConnected }">
-              {{ apiConnected ? '已连接' : '未配置' }}
+            <span class="api-status" :class="{ connected: apiUsable, checking: apiConfig.checking }">
+              {{ apiStatusLabel }}
             </span>
           </div>
         </div>
@@ -322,6 +379,16 @@ const settings = reactive({
   autoOpenSubtitleWindow: true
 })
 
+const apiConfig = reactive({
+  dashscopeApiKey: '',
+  dashscopeLiveTranslateModel: 'qwen3.5-livetranslate-flash-realtime',
+  hasDashscopeApiKey: false,
+  saving: false,
+  checking: false,
+  usable: false,
+  message: ''
+})
+
 const tabs = [
   { id: 'mic', icon: '🎙️', label: '麦克风' },
   { id: 'desktop', icon: '🖥️', label: '桌面音频' }
@@ -374,6 +441,7 @@ const PARTIAL_RENDER_INTERVAL_MS = 180
 const MAX_STORED_SUBTITLES = 80
 const FLOATING_SUBTITLE_ROWS = 3
 const EXTERNAL_SUBTITLE_ROWS = 3
+const API_ORIGIN = window.location.protocol === 'file:' ? 'http://127.0.0.1:9000' : ''
 
 const latestSubtitle = computed(() => {
   for (let i = subtitles.value.length - 1; i >= 0; i--) {
@@ -406,6 +474,15 @@ const subtitleWindowActive = computed(() =>
   electronSubtitleWindowOpen.value ||
   Boolean(independentSubtitleWindow && !independentSubtitleWindow.closed)
 )
+
+const apiUsable = computed(() => Boolean(apiConfig.usable))
+
+const apiStatusLabel = computed(() => {
+  if (apiConfig.checking) return '检测中'
+  if (apiConfig.usable) return '可用'
+  if (apiConnected.value || apiConfig.hasDashscopeApiKey) return '未检测'
+  return '未配置'
+})
 
 function formatTime(timestamp) {
   if (!timestamp) return ''
@@ -596,6 +673,247 @@ function getElectronSubtitles() {
   } catch {
     return null
   }
+}
+
+function getElectronAppConfig() {
+  if (window.electronAppConfig) return window.electronAppConfig
+
+  try {
+    const ipcRenderer = window.require?.('electron')?.ipcRenderer
+    if (!ipcRenderer) return null
+
+    return {
+      get: () => ipcRenderer.invoke('app-config:get'),
+      save: (config) => ipcRenderer.invoke('app-config:save', config),
+      clear: () => ipcRenderer.invoke('app-config:clear'),
+      check: (config) => ipcRenderer.invoke('app-config:check', config),
+      restartBackend: () => ipcRenderer.invoke('app-config:restart-backend')
+    }
+  } catch {
+    return null
+  }
+}
+
+function apiUrl(path) {
+  return `${API_ORIGIN}${path}`
+}
+
+async function refreshApiStatus() {
+  try {
+    const response = await fetch(apiUrl('/api/status'))
+    const data = await response.json()
+    apiConnected.value = Boolean(data.api_configured)
+    if (data.api_configured) {
+      apiConfig.hasDashscopeApiKey = true
+    } else {
+      apiConfig.usable = false
+    }
+    const liveModel = data.models?.livetranslate
+    if (liveModel && !apiConfig.dashscopeLiveTranslateModel) {
+      apiConfig.dashscopeLiveTranslateModel = liveModel
+    }
+    return data
+  } catch {
+    apiConnected.value = false
+    return null
+  }
+}
+
+async function loadApiConfig() {
+  const electronAppConfig = getElectronAppConfig()
+  let hasSavedKey = false
+  try {
+    const saved = await electronAppConfig?.get?.()
+    if (saved) {
+      hasSavedKey = Boolean(saved.hasDashscopeApiKey)
+      apiConfig.hasDashscopeApiKey = hasSavedKey
+      apiConfig.usable = false
+      apiConfig.message = hasSavedKey
+        ? '已发现本机保存的 API Key，正在检测可用性。'
+        : '未配置 API Key。'
+      if (saved.dashscopeLiveTranslateModel) {
+        apiConfig.dashscopeLiveTranslateModel = saved.dashscopeLiveTranslateModel
+      }
+    }
+  } catch {
+    ElMessage.warning('读取应用配置失败')
+  }
+
+  const status = await refreshApiStatus()
+  if (status?.models?.livetranslate && !apiConfig.dashscopeLiveTranslateModel) {
+    apiConfig.dashscopeLiveTranslateModel = status.models.livetranslate
+  }
+
+  if (hasSavedKey || apiConnected.value) {
+    await checkApiConfig({ silent: true, apiKey: '', model: apiConfig.dashscopeLiveTranslateModel.trim() })
+  }
+}
+
+async function saveApiConfig() {
+  const apiKey = apiConfig.dashscopeApiKey.trim()
+  const model = apiConfig.dashscopeLiveTranslateModel.trim()
+
+  if (!apiKey && !apiConfig.hasDashscopeApiKey && !apiConnected.value) {
+    ElMessage.warning('请填写 DashScope API Key')
+    return
+  }
+
+  if (!model) {
+    ElMessage.warning('请填写实时模型名称')
+    return
+  }
+
+  apiConfig.saving = true
+  try {
+    const electronAppConfig = getElectronAppConfig()
+    const checkResult = await checkApiConfig({ silent: true, apiKey, model })
+    if (!checkResult.usable) throw new Error(checkResult.message || 'API Key 检测未通过')
+
+    const saved = await electronAppConfig?.save?.({
+      dashscopeApiKey: apiKey,
+      dashscopeLiveTranslateModel: model
+    })
+
+    const data = await applyRuntimeApiConfig({ apiKey, model, electronAppConfig })
+    apiConnected.value = Boolean(data.api_configured)
+    apiConfig.hasDashscopeApiKey = Boolean(saved?.hasDashscopeApiKey || data.api_configured || apiKey)
+    apiConfig.usable = true
+    apiConfig.message = 'DashScope API Key 已保存并检测可用。'
+    apiConfig.dashscopeApiKey = ''
+    ElMessage.success(electronAppConfig ? '配置已保存' : '配置已应用到当前后端')
+  } catch (error) {
+    if (electronAppConfig) {
+      ElMessage.error(`配置未保存: ${error.message || error}`)
+    } else {
+      ElMessage.error(`保存配置失败: ${error.message || error}`)
+    }
+  } finally {
+    apiConfig.saving = false
+  }
+}
+
+async function checkApiConfig({ silent = false, apiKey = apiConfig.dashscopeApiKey.trim(), model = apiConfig.dashscopeLiveTranslateModel.trim() } = {}) {
+  if (!apiKey && !apiConfig.hasDashscopeApiKey && !apiConnected.value) {
+    const result = { usable: false, message: '请先输入 DashScope API Key' }
+    apiConfig.usable = false
+    apiConfig.message = result.message
+    if (!silent) ElMessage.warning(result.message)
+    return result
+  }
+
+  if (!model) {
+    const result = { usable: false, message: '请填写实时模型名称' }
+    apiConfig.usable = false
+    apiConfig.message = result.message
+    if (!silent) ElMessage.warning(result.message)
+    return result
+  }
+
+  apiConfig.checking = true
+  try {
+    const electronAppConfig = getElectronAppConfig()
+    let result = null
+
+    if (electronAppConfig?.check) {
+      result = await electronAppConfig.check({
+        dashscopeApiKey: apiKey,
+        dashscopeLiveTranslateModel: model
+      })
+    } else {
+      const response = await fetch(apiUrl('/api/runtime-config/check'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          dashscope_api_key: apiKey || undefined,
+          dashscope_livetranslate_model: model
+        })
+      })
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      result = await response.json()
+    }
+
+    apiConfig.usable = Boolean(result.usable)
+    apiConfig.message = result.message || (result.usable ? 'API Key 可用' : 'API Key 不可用')
+    if (!silent) {
+      if (result.usable) ElMessage.success(apiConfig.message)
+      else ElMessage.error(apiConfig.message)
+    }
+    return result
+  } catch (error) {
+    const result = { usable: false, message: `API 检测失败: ${error.message || error}` }
+    apiConfig.usable = false
+    apiConfig.message = result.message
+    if (!silent) ElMessage.error(result.message)
+    return result
+  } finally {
+    apiConfig.checking = false
+  }
+}
+
+async function clearApiConfig() {
+  const electronAppConfig = getElectronAppConfig()
+  try {
+    await electronAppConfig?.clear?.()
+    await electronAppConfig?.restartBackend?.()
+  } catch {}
+
+  apiConfig.dashscopeApiKey = ''
+  apiConfig.hasDashscopeApiKey = false
+  apiConfig.usable = false
+  apiConfig.message = '配置已清除，请重新输入 API Key。'
+  apiConnected.value = false
+  ElMessage.success('本机 API 配置已清除')
+}
+
+async function ensureApiReady() {
+  if (!apiConnected.value && !apiConfig.hasDashscopeApiKey && !apiConfig.dashscopeApiKey.trim()) {
+    showSettings.value = true
+    ElMessage.warning('请先在设置里填写 DashScope API Key')
+    return false
+  }
+
+  if (apiConfig.usable) return true
+
+  const result = await checkApiConfig({ silent: true })
+  if (result.usable) return true
+
+  showSettings.value = true
+  ElMessage.error(result.message || 'API Key 不可用，请先检测配置')
+  return false
+}
+
+async function applyRuntimeApiConfig({ apiKey, model, electronAppConfig }) {
+  try {
+    const response = await fetch(apiUrl('/api/runtime-config'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        dashscope_api_key: apiKey || undefined,
+        dashscope_livetranslate_model: model
+      })
+    })
+
+    if (!response.ok) throw new Error(`HTTP ${response.status}`)
+    return await response.json()
+  } catch (error) {
+    if (!electronAppConfig?.restartBackend) throw error
+
+    ElMessage.warning('正在重启后端以应用配置...')
+    await electronAppConfig.restartBackend()
+    const status = await waitForBackendStatus()
+    if (!status?.api_configured) throw new Error('后端已重启，但 API Key 未生效')
+    return status
+  }
+}
+
+async function waitForBackendStatus(timeoutMs = 12000) {
+  const startedAt = Date.now()
+  while (Date.now() - startedAt < timeoutMs) {
+    const status = await refreshApiStatus()
+    if (status?.status === 'running') return status
+    await new Promise(resolve => setTimeout(resolve, 500))
+  }
+  throw new Error('等待后端重启超时')
 }
 
 async function toggleIndependentSubtitleWindow() {
@@ -922,6 +1240,7 @@ async function toggleCapture() {
 
 async function startCapture() {
   try {
+    if (!(await ensureApiReady())) return
     await connectWS()
     captureStream = await navigator.mediaDevices.getDisplayMedia({
       video: true,
@@ -1029,7 +1348,8 @@ function connectWS() {
     })
   }
 
-  const wsUrl = `ws://${window.location.hostname}:9000/ws/translate`
+  const wsHost = window.location.hostname || '127.0.0.1'
+  const wsUrl = `ws://${wsHost}:9000/ws/translate`
   ws = new WebSocket(wsUrl)
 
   const openPromise = new Promise((resolve, reject) => {
@@ -1420,6 +1740,7 @@ function findCorrectionTarget(segmentId, replacement = {}) {
 
 async function startRecording() {
   try {
+    if (!(await ensureApiReady())) return
     await connectWS()
     wavRecorder = new WavRecorder(16000, {
       bufferDuration: 0.04,
@@ -1610,13 +1931,7 @@ onMounted(async () => {
     }
   }
 
-  try {
-    const response = await fetch('/api/status')
-    const data = await response.json()
-    apiConnected.value = data.api_configured
-  } catch {
-    apiConnected.value = false
-  }
+  await loadApiConfig()
 })
 
 onUnmounted(() => {
@@ -2364,6 +2679,123 @@ body {
 
 .drawer-body { padding: 20px; flex: 1; overflow-y: auto; }
 
+.api-config-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 0 0 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+.api-config-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.api-config-heading h4 {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.config-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.config-field span {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.config-input {
+  width: 100%;
+  height: 42px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  outline: none;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-primary);
+  font-size: 13px;
+  transition: border-color 0.2s, background 0.2s;
+}
+
+.config-input::placeholder {
+  color: var(--text-muted);
+}
+
+.config-input:hover,
+.config-input:focus {
+  border-color: rgba(99, 102, 241, 0.72);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.save-config-btn {
+  width: 100%;
+  height: 42px;
+  border: 0;
+  border-radius: 8px;
+  background: #1f2937;
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: background 0.2s, opacity 0.2s;
+}
+
+.save-config-btn:hover:not(:disabled) {
+  background: #111827;
+}
+
+.save-config-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+.api-config-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.secondary-config-btn {
+  height: 36px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s, opacity 0.2s;
+}
+
+.secondary-config-btn:hover:not(:disabled) {
+  border-color: rgba(99, 102, 241, 0.7);
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.secondary-config-btn.danger {
+  color: #fca5a5;
+}
+
+.secondary-config-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+.api-config-note {
+  min-height: 18px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .setting-group {
   display: flex;
   align-items: center;
@@ -2383,6 +2815,7 @@ body {
 }
 
 .api-status.connected { background: rgba(34, 197, 94, 0.1); color: var(--success); }
+.api-status.checking { background: rgba(245, 158, 11, 0.12); color: var(--warning); }
 
 .subtitle-enter-active, .subtitle-leave-active { transition: all 0.3s; }
 .subtitle-enter-from { opacity: 0; transform: translateY(16px); }

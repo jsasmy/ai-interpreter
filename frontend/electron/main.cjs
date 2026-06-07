@@ -1,4 +1,4 @@
-const { app, BrowserWindow, desktopCapturer, ipcMain, screen, session } = require('electron')
+const { app, BrowserWindow, Menu, Tray, desktopCapturer, ipcMain, nativeImage, screen, session } = require('electron')
 const { spawn, spawnSync } = require('child_process')
 const fs = require('fs')
 const http = require('http')
@@ -7,14 +7,23 @@ const path = require('path')
 const FRONTEND_PORT = Number(process.env.FRONTEND_PORT || 3001)
 const BACKEND_PORT = Number(process.env.BACKEND_PORT || 9000)
 const FRONTEND_URL = process.env.FRONTEND_URL || `http://127.0.0.1:${FRONTEND_PORT}`
+const appName = 'AI Interpreter'
+
+app.setName(appName)
 
 const frontendRoot = path.resolve(__dirname, '..')
 const projectRoot = app.isPackaged ? process.resourcesPath : path.resolve(frontendRoot, '..')
 const backendRoot = path.join(projectRoot, 'backend')
 const logsRoot = app.isPackaged ? path.join(app.getPath('userData'), 'logs') : path.join(projectRoot, 'logs')
+const appConfigPath = path.join(app.getPath('userData'), 'api-config.json')
+const legacyDevConfigPath = path.join(app.getPath('appData'), 'ai-interpreter-frontend', 'api-config.json')
+const iconPath = path.join(frontendRoot, 'build', 'icon.ico')
 
 let mainWindow = null
 let subtitleWindow = null
+let backendProcess = null
+let tray = null
+let isQuitting = false
 const childProcesses = []
 let startupError = ''
 let latestSubtitlePayload = []
@@ -22,6 +31,64 @@ const preloadPath = path.join(__dirname, 'preload.cjs')
 
 function ensureLogsRoot() {
   fs.mkdirSync(logsRoot, { recursive: true })
+}
+
+function normalizeApiConfig(config = {}) {
+  return {
+    dashscopeApiKey: typeof config.dashscopeApiKey === 'string' ? config.dashscopeApiKey.trim() : '',
+    dashscopeLiveTranslateModel: typeof config.dashscopeLiveTranslateModel === 'string'
+      ? config.dashscopeLiveTranslateModel.trim()
+      : '',
+  }
+}
+
+function readApiConfig() {
+  try {
+    const configPath = fs.existsSync(appConfigPath) ? appConfigPath : legacyDevConfigPath
+    if (!fs.existsSync(configPath)) return normalizeApiConfig()
+    return normalizeApiConfig(JSON.parse(fs.readFileSync(configPath, 'utf8')))
+  } catch (error) {
+    appendStartupError(`read api config failed: ${error.message}`)
+    return normalizeApiConfig()
+  }
+}
+
+function getApiConfigForRenderer() {
+  const config = readApiConfig()
+  return {
+    hasDashscopeApiKey: Boolean(config.dashscopeApiKey),
+    dashscopeLiveTranslateModel: config.dashscopeLiveTranslateModel,
+  }
+}
+
+function saveApiConfig(input = {}) {
+  const existing = readApiConfig()
+  const incoming = normalizeApiConfig(input)
+  const next = {
+    dashscopeApiKey: incoming.dashscopeApiKey || existing.dashscopeApiKey,
+    dashscopeLiveTranslateModel: incoming.dashscopeLiveTranslateModel || existing.dashscopeLiveTranslateModel,
+  }
+
+  fs.mkdirSync(path.dirname(appConfigPath), { recursive: true })
+  fs.writeFileSync(appConfigPath, `${JSON.stringify(next, null, 2)}\n`, 'utf8')
+  return getApiConfigForRenderer()
+}
+
+function clearApiConfig() {
+  for (const configPath of [appConfigPath, legacyDevConfigPath]) {
+    if (fs.existsSync(configPath)) fs.rmSync(configPath, { force: true })
+  }
+  return getApiConfigForRenderer()
+}
+
+function getBackendConfigEnv() {
+  const config = readApiConfig()
+  const env = { TRANSLATION_PROVIDER: 'aliyun_livetranslate' }
+  if (config.dashscopeApiKey) env.DASHSCOPE_API_KEY = config.dashscopeApiKey
+  if (config.dashscopeLiveTranslateModel) {
+    env.DASHSCOPE_LIVETRANSLATE_MODEL = config.dashscopeLiveTranslateModel
+  }
+  return env
 }
 
 function cloneSubtitlePayload(payload) {
@@ -140,10 +207,34 @@ function spawnManaged(command, args, options) {
   child.on('exit', (code, signal) => {
     log.write(`\n[${new Date().toISOString()}] ${label} exited code=${code} signal=${signal}\n`)
     log.end()
-    if (code) appendStartupError(`${label} exited early, log: ${logPath}`)
+    const index = childProcesses.indexOf(child)
+    if (index !== -1) childProcesses.splice(index, 1)
+    if (backendProcess === child) backendProcess = null
+    if (code && !child.expectedExit) appendStartupError(`${label} exited early, log: ${logPath}`)
   })
   childProcesses.push(child)
   return child
+}
+
+function stopManagedChild(child, timeoutMs = 5000) {
+  return new Promise((resolve) => {
+    if (!child || child.killed || child.exitCode !== null) {
+      resolve()
+      return
+    }
+
+    let settled = false
+    const done = () => {
+      if (settled) return
+      settled = true
+      resolve()
+    }
+
+    child.expectedExit = true
+    child.once('exit', done)
+    child.kill()
+    setTimeout(done, timeoutMs)
+  })
 }
 
 function isHttpReady(url) {
@@ -158,6 +249,129 @@ function isHttpReady(url) {
       resolve(false)
     })
   })
+}
+
+function fetchJson(url, timeoutMs = 1000) {
+  return new Promise((resolve, reject) => {
+    const req = http.get(url, (res) => {
+      let body = ''
+      res.setEncoding('utf8')
+      res.on('data', (chunk) => {
+        body += chunk
+      })
+      res.on('end', () => {
+        try {
+          resolve(JSON.parse(body))
+        } catch (error) {
+          reject(error)
+        }
+      })
+    })
+    req.on('error', reject)
+    req.setTimeout(timeoutMs, () => {
+      req.destroy(new Error('request timed out'))
+    })
+  })
+}
+
+function postJson(url, payload, timeoutMs = 10000) {
+  return new Promise((resolve, reject) => {
+    const body = JSON.stringify(payload || {})
+    const parsed = new URL(url)
+    const req = http.request({
+      hostname: parsed.hostname,
+      port: parsed.port,
+      path: `${parsed.pathname}${parsed.search}`,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(body),
+      },
+      timeout: timeoutMs,
+    }, (res) => {
+      let responseBody = ''
+      res.setEncoding('utf8')
+      res.on('data', (chunk) => {
+        responseBody += chunk
+      })
+      res.on('end', () => {
+        let data = {}
+        try {
+          data = responseBody ? JSON.parse(responseBody) : {}
+        } catch (error) {
+          reject(error)
+          return
+        }
+        if (res.statusCode < 200 || res.statusCode >= 300) {
+          const error = new Error(`HTTP ${res.statusCode}`)
+          error.statusCode = res.statusCode
+          error.body = data
+          reject(error)
+          return
+        }
+        resolve(data)
+      })
+    })
+    req.on('error', reject)
+    req.on('timeout', () => {
+      req.destroy(new Error('request timed out'))
+    })
+    req.write(body)
+    req.end()
+  })
+}
+
+async function isProjectBackendRunning() {
+  try {
+    const status = await fetchJson(`http://127.0.0.1:${BACKEND_PORT}/api/status`)
+    return status?.status === 'running' && status?.version === '2.0.0'
+  } catch {
+    return false
+  }
+}
+
+function getWindowsPortListenerPid(port) {
+  if (process.platform !== 'win32') return 0
+  const result = spawnSync('netstat', ['-ano', '-p', 'tcp'], {
+    encoding: 'utf8',
+    windowsHide: true,
+  })
+  if (result.status !== 0) return 0
+
+  const pattern = new RegExp(`(?:^|\\s)(?:127\\.0\\.0\\.1|0\\.0\\.0\\.0|\\[::\\]|\\[::1\\]|\\S+):${port}\\s+\\S+\\s+LISTENING\\s+(\\d+)`, 'i')
+  for (const line of (result.stdout || '').split(/\r?\n/)) {
+    const match = line.match(pattern)
+    if (match) return Number(match[1])
+  }
+  return 0
+}
+
+async function stopExternalProjectBackend() {
+  if (!(await isProjectBackendRunning())) {
+    throw new Error('port is occupied by an unknown service')
+  }
+
+  const pid = getWindowsPortListenerPid(BACKEND_PORT)
+  if (!pid) throw new Error(`could not find process listening on port ${BACKEND_PORT}`)
+  if (pid === process.pid) throw new Error('refusing to stop current Electron process')
+
+  try {
+    process.kill(pid)
+  } catch (error) {
+    throw new Error(`failed to stop backend process ${pid}: ${error.message}`)
+  }
+
+  const stopped = await waitForPortClosed(`http://127.0.0.1:${BACKEND_PORT}/api/status`)
+  if (!stopped) throw new Error(`backend process ${pid} did not stop`)
+}
+
+async function waitForPortClosed(url, timeoutMs = 5000) {
+  const startedAt = Date.now()
+  while (Date.now() - startedAt < timeoutMs) {
+    if (!(await isHttpReady(url))) return true
+    await new Promise((resolve) => setTimeout(resolve, 300))
+  }
+  return false
 }
 
 async function waitForHttp(url, timeoutMs = 25000) {
@@ -177,6 +391,50 @@ function escapeHtml(value) {
     '"': '&quot;',
     "'": '&#39;',
   }[ch]))
+}
+
+function createTrayIcon() {
+  if (fs.existsSync(iconPath)) return nativeImage.createFromPath(iconPath)
+
+  const svg = `
+    <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
+      <rect width="32" height="32" rx="8" fill="#111827"/>
+      <circle cx="16" cy="16" r="11" fill="#22c55e"/>
+      <path d="M11 17.5c2.2 2.6 7.8 2.6 10 0" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/>
+      <path d="M12 11.5h8" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/>
+      <path d="M16 8.5v6" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/>
+    </svg>
+  `
+  return nativeImage.createFromDataURL(`data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`)
+}
+
+function showMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    createWindow()
+    return
+  }
+  if (mainWindow.isMinimized()) mainWindow.restore()
+  mainWindow.show()
+  mainWindow.focus()
+}
+
+function quitFromTray() {
+  isQuitting = true
+  closeSubtitleWindow()
+  stopChildProcesses()
+  app.quit()
+}
+
+function setupTray() {
+  if (tray) return
+  tray = new Tray(createTrayIcon())
+  tray.setToolTip('AI 同声传译助手')
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: '打开主窗口', click: showMainWindow },
+    { type: 'separator' },
+    { label: '退出', click: quitFromTray },
+  ]))
+  tray.on('click', showMainWindow)
 }
 
 async function showStartupError(title, detail) {
@@ -481,19 +739,112 @@ function setupSubtitleWindowIpc() {
   })
 }
 
-async function startBackend() {
+async function checkAndApplyRuntimeConfig(config) {
+  const input = normalizeApiConfig(config)
+  const saved = readApiConfig()
+  const apiKey = input.dashscopeApiKey || saved.dashscopeApiKey
+  const model = input.dashscopeLiveTranslateModel || saved.dashscopeLiveTranslateModel
+  const payload = {
+    dashscope_api_key: apiKey || undefined,
+    dashscope_livetranslate_model: model || undefined,
+  }
+
+  await startBackend()
+  const result = await postJson(`http://127.0.0.1:${BACKEND_PORT}/api/runtime-config/check`, payload)
+  if (result.usable) {
+    await postJson(`http://127.0.0.1:${BACKEND_PORT}/api/runtime-config`, payload)
+  }
+  return result
+}
+
+async function applySavedRuntimeConfig() {
+  const saved = readApiConfig()
+  if (!saved.dashscopeApiKey) return { applied: false }
+
+  const payload = {
+    dashscope_api_key: saved.dashscopeApiKey,
+    dashscope_livetranslate_model: saved.dashscopeLiveTranslateModel || undefined,
+  }
+
+  try {
+    await postJson(`http://127.0.0.1:${BACKEND_PORT}/api/runtime-config`, payload, 3000)
+  } catch (error) {
+    if (error.statusCode === 404) {
+      await restartBackend()
+      await postJson(`http://127.0.0.1:${BACKEND_PORT}/api/runtime-config`, payload, 3000)
+    } else {
+      throw error
+    }
+  }
+
+  return { applied: true }
+}
+
+async function clearRuntimeConfig() {
+  const payload = { dashscope_api_key: '' }
+
+  try {
+    await startBackend()
+    await postJson(`http://127.0.0.1:${BACKEND_PORT}/api/runtime-config`, payload, 3000)
+  } catch (error) {
+    if (error.statusCode === 404) {
+      await restartBackend()
+      await postJson(`http://127.0.0.1:${BACKEND_PORT}/api/runtime-config`, payload, 3000)
+      return
+    }
+    throw error
+  }
+}
+
+function setupAppConfigIpc() {
+  ipcMain.handle('app-config:get', () => getApiConfigForRenderer())
+  ipcMain.handle('app-config:save', (_event, config) => saveApiConfig(config))
+  ipcMain.handle('app-config:clear', async () => {
+    const result = clearApiConfig()
+    await clearRuntimeConfig()
+    return result
+  })
+  ipcMain.handle('app-config:check', async (_event, config) => {
+    try {
+      return await checkAndApplyRuntimeConfig(config)
+    } catch (error) {
+      if (error.statusCode === 404) {
+        await restartBackend()
+        return checkAndApplyRuntimeConfig(config)
+      }
+      throw error
+    }
+  })
+  ipcMain.handle('app-config:restart-backend', async () => {
+    await restartBackend()
+    return { restarted: true, apiConfigured: readApiConfig().dashscopeApiKey.length > 0 }
+  })
+}
+
+async function startBackend({ force = false } = {}) {
   const ready = await isHttpReady(`http://127.0.0.1:${BACKEND_PORT}/api/status`)
-  if (ready) return
+  if (ready && !force) return
+  if (force && ready && !backendProcess) {
+    await stopExternalProjectBackend()
+  }
+  if (force && backendProcess) {
+    await stopManagedChild(backendProcess)
+  }
 
   const python = getPythonCommand()
-  spawnManaged(python, ['-m', 'uvicorn', 'main:app', '--host', '0.0.0.0', '--port', String(BACKEND_PORT)], {
+  backendProcess = spawnManaged(python, ['-m', 'uvicorn', 'main:app', '--host', '0.0.0.0', '--port', String(BACKEND_PORT)], {
     cwd: backendRoot,
     label: 'backend',
+    env: getBackendConfigEnv(),
   })
   const started = await waitForHttp(`http://127.0.0.1:${BACKEND_PORT}/api/status`)
   if (!started) {
     throw new Error(`backend failed to start. Python: ${python}\n${startupError || `log: ${path.join(logsRoot, 'backend.electron.log')}`}`)
   }
+}
+
+async function restartBackend() {
+  await startBackend({ force: true })
 }
 
 async function startFrontendDevServer() {
@@ -535,6 +886,7 @@ function setupDesktopAudioCapture() {
 }
 
 async function createWindow() {
+  setupTray()
   setupDesktopAudioCapture()
 
   mainWindow = new BrowserWindow({
@@ -543,6 +895,7 @@ async function createWindow() {
     minWidth: 1100,
     minHeight: 720,
     backgroundColor: '#0f0f23',
+    icon: fs.existsSync(iconPath) ? iconPath : undefined,
     autoHideMenuBar: true,
     webPreferences: {
       preload: preloadPath,
@@ -552,8 +905,15 @@ async function createWindow() {
     },
   })
 
+  mainWindow.on('close', (event) => {
+    if (isQuitting) return
+    event.preventDefault()
+    mainWindow.hide()
+  })
+
   try {
     await startBackend()
+    await applySavedRuntimeConfig()
 
     if (app.isPackaged) {
       await mainWindow.loadFile(path.join(frontendRoot, 'dist', 'index.html'))
@@ -571,21 +931,28 @@ async function createWindow() {
 
 function stopChildProcesses() {
   for (const child of childProcesses.splice(0)) {
+    child.expectedExit = true
     if (!child.killed) child.kill()
   }
 }
 
 app.whenReady().then(() => {
   setupSubtitleWindowIpc()
+  setupAppConfigIpc()
   return createWindow()
 })
 
 app.on('window-all-closed', () => {
-  stopChildProcesses()
-  if (process.platform !== 'darwin') app.quit()
+  if (isQuitting) {
+    stopChildProcesses()
+    if (process.platform !== 'darwin') app.quit()
+  }
 })
 
-app.on('before-quit', stopChildProcesses)
+app.on('before-quit', () => {
+  isQuitting = true
+  stopChildProcesses()
+})
 
 app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) createWindow()

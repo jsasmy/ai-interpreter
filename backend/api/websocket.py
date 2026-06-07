@@ -16,6 +16,7 @@ from services.correction_service import correction_service
 from services.aliyun_asr_realtime_service import AliyunAsrRealtimeSession
 from services.aliyun_livetranslate_service import AliyunLiveTranslateSession
 from services.dashscope_text_service import dashscope_text_translator
+from services.dashscope_tts_service import dashscope_tts_service
 from services.xiaomi_api import xiaomi_client
 from config import settings
 
@@ -26,6 +27,11 @@ router = APIRouter()
 class RuntimeApiConfig(BaseModel):
     dashscope_api_key: Optional[str] = None
     dashscope_livetranslate_model: Optional[str] = None
+
+
+class TTSRequest(BaseModel):
+    text: str
+    voice: Optional[str] = None
 
 
 def detect_text_language(text: str) -> str:
@@ -93,9 +99,15 @@ manager = ConnectionManager()
 
 
 @router.post("/api/tts")
-async def text_to_speech(text: str, voice: str = "default"):
+async def text_to_speech(request: TTSRequest):
     try:
-        audio_data = await xiaomi_client.text_to_speech(text, voice)
+        if settings.TRANSLATION_PROVIDER == "aliyun_livetranslate":
+            audio_data = await dashscope_tts_service.synthesize(
+                request.text,
+                request.voice or settings.DASHSCOPE_TTS_VOICE,
+            )
+        else:
+            audio_data = await xiaomi_client.text_to_speech(request.text, request.voice or "default")
         if not audio_data:
             raise HTTPException(500, "语音合成失败")
 
@@ -118,6 +130,8 @@ async def get_models():
             "provider": settings.TRANSLATION_PROVIDER,
             "livetranslate": settings.DASHSCOPE_LIVETRANSLATE_MODEL,
             "asr": settings.DASHSCOPE_ASR_MODEL,
+            "tts": settings.DASHSCOPE_TTS_MODEL,
+            "tts_voice": settings.DASHSCOPE_TTS_VOICE,
         }
 
     return {
@@ -141,6 +155,8 @@ async def get_status():
                 "second_livetranslate": settings.DASHSCOPE_SECOND_LIVETRANSLATE_MODEL,
                 "asr": settings.DASHSCOPE_ASR_MODEL,
                 "fallback_text": settings.DASHSCOPE_TEXT_MODEL,
+                "tts": settings.DASHSCOPE_TTS_MODEL,
+                "tts_voice": settings.DASHSCOPE_TTS_VOICE,
             },
             "fallback": {
                 "second_e2e_enabled": settings.ENABLE_SECOND_E2E,

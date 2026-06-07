@@ -209,6 +209,21 @@
 
       <div class="footer-right">
         <button
+          class="action-btn speech-toggle-btn"
+          :class="{ active: settings.enableSpeechReadout }"
+          @click="toggleSpeechReadout"
+        >
+          <svg v-if="settings.enableSpeechReadout" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+            <path d="M15.54 8.46a5 5 0 010 7.07M19.07 4.93a10 10 0 010 14.14"/>
+          </svg>
+          <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+            <path d="M23 9l-6 6M17 9l6 6"/>
+          </svg>
+          <span>{{ settings.enableSpeechReadout ? '朗读开' : '朗读关' }}</span>
+        </button>
+        <button
           class="action-btn subtitle-toggle-btn"
           :class="{ active: subtitleWindowActive }"
           @click="toggleIndependentSubtitleWindow"
@@ -312,6 +327,14 @@
             <el-switch v-model="settings.autoOpenSubtitleWindow" />
           </div>
           <div class="setting-group">
+            <label>朗读音色</label>
+            <select v-model="settings.speechVoiceStyle" class="compact-setting-select">
+              <option value="sweet">龙菲菲（甜美女声）</option>
+              <option value="natural">龙小淳（自然女声）</option>
+              <option value="system">系统默认</option>
+            </select>
+          </div>
+          <div class="setting-group">
             <label>API 状态</label>
             <span class="api-status" :class="{ connected: apiUsable, checking: apiConfig.checking }">
               {{ apiStatusLabel }}
@@ -376,7 +399,10 @@ const settings = reactive({
   sourceLang: 'EN',
   targetLang: 'ZH',
   enableCorrection: true,
-  autoOpenSubtitleWindow: true
+  autoOpenSubtitleWindow: true,
+  enableSpeechReadout: true,
+  pauseSpeechReadoutWhileListening: false,
+  speechVoiceStyle: 'sweet'
 })
 
 const apiConfig = reactive({
@@ -436,6 +462,10 @@ let independentSubtitleWindow = null
 let removeElectronSubtitleClosedListener = null
 let removeElectronSubtitleUpdateListener = null
 let subtitleBroadcastChannel = null
+let activeSpeechAudio = null
+let activeSpeechObjectUrl = ''
+let speechPlaybackQueue = Promise.resolve()
+const spokenSubtitleKeys = new Set()
 const pendingPartialSubtitles = new Map()
 const PARTIAL_RENDER_INTERVAL_MS = 180
 const MAX_STORED_SUBTITLES = 80
@@ -483,6 +513,65 @@ const apiStatusLabel = computed(() => {
   if (apiConnected.value || apiConfig.hasDashscopeApiKey) return '未检测'
   return '未配置'
 })
+
+const speechLangMap = {
+  ZH: 'zh-CN',
+  YUE: 'zh-HK',
+  EN: 'en-US',
+  JA: 'ja-JP',
+  KO: 'ko-KR',
+  FR: 'fr-FR',
+  DE: 'de-DE',
+  ES: 'es-ES',
+  PT: 'pt-PT',
+  IT: 'it-IT',
+  RU: 'ru-RU',
+  AR: 'ar-SA',
+  VI: 'vi-VN',
+  TH: 'th-TH',
+  ID: 'id-ID',
+  HI: 'hi-IN',
+  EL: 'el-GR',
+  TR: 'tr-TR'
+}
+
+const READABLE_CORRECTION_STATUSES = new Set(['checked', 'corrected'])
+
+const sweetVoiceKeywords = [
+  'xiaoxiao',
+  'xiaoyi',
+  'xiaomo',
+  'xiaoxuan',
+  'xiaohan',
+  'xiaorui',
+  'jenny',
+  'aria',
+  'zira',
+  'natasha',
+  'susan',
+  'samantha',
+  'nanami',
+  'haruka',
+  'sunhi',
+  'natural',
+  'neural',
+  'online'
+]
+
+const lessSweetVoiceKeywords = [
+  'yunxi',
+  'yunyang',
+  'david',
+  'mark',
+  'guy',
+  'george',
+  'male'
+]
+
+const dashscopeSpeechVoices = {
+  sweet: 'longfeifei_v2',
+  natural: 'longxiaochun_v2'
+}
 
 function formatTime(timestamp) {
   if (!timestamp) return ''
@@ -561,6 +650,161 @@ function correctionStatusLabel(status = '') {
     skipped: '已跳过'
   }
   return labels[status] || status
+}
+
+function toggleSpeechReadout() {
+  settings.enableSpeechReadout = !settings.enableSpeechReadout
+  if (!settings.enableSpeechReadout) {
+    cancelSpeechPlayback()
+  }
+}
+
+function subtitleSpeechKey(subtitle = {}) {
+  const identity = subtitle.itemId || subtitle.id || subtitle.timestamp || ''
+  return `${identity}:${subtitle.translated || ''}`
+}
+
+function shouldReadSubtitle(subtitle = {}) {
+  return Boolean(
+    settings.enableSpeechReadout &&
+    !isSubtitleWindowMode &&
+    subtitle.translated &&
+    !subtitle.isPartial &&
+    READABLE_CORRECTION_STATUSES.has(subtitle.correctionStatus)
+  )
+}
+
+function getSpeechLang() {
+  return speechLangMap[settings.targetLang] || 'zh-CN'
+}
+
+function scoreSpeechVoice(voice, lang) {
+  const voiceLang = (voice.lang || '').toLowerCase()
+  const targetLang = lang.toLowerCase()
+  const baseLang = targetLang.split('-')[0]
+  const name = (voice.name || '').toLowerCase()
+  let score = 0
+
+  if (voiceLang === targetLang) score += 120
+  else if (voiceLang.startsWith(baseLang)) score += 80
+  else return -1
+
+  if (voice.localService) score += 8
+  if (settings.speechVoiceStyle === 'system') return score
+
+  if (name.includes('natural') || name.includes('neural') || name.includes('online')) score += 18
+  if (settings.speechVoiceStyle === 'sweet') {
+    sweetVoiceKeywords.forEach(keyword => {
+      if (name.includes(keyword)) score += 24
+    })
+    lessSweetVoiceKeywords.forEach(keyword => {
+      if (name.includes(keyword)) score -= 18
+    })
+  }
+
+  return score
+}
+
+function chooseSpeechVoice(lang) {
+  if (settings.speechVoiceStyle === 'system' || !window.speechSynthesis?.getVoices) return null
+  return window.speechSynthesis
+    .getVoices()
+    .map(voice => ({ voice, score: scoreSpeechVoice(voice, lang) }))
+    .filter(candidate => candidate.score >= 0)
+    .sort((a, b) => b.score - a.score)[0]?.voice || null
+}
+
+function getSpeechToneOptions() {
+  if (settings.speechVoiceStyle === 'sweet') {
+    return { rate: 0.94, pitch: 1.12, volume: 1 }
+  }
+  if (settings.speechVoiceStyle === 'natural') {
+    return { rate: 0.98, pitch: 1.02, volume: 1 }
+  }
+  return { rate: 1, pitch: 1, volume: 1 }
+}
+
+function cancelSpeechPlayback() {
+  activeSpeechAudio?.pause?.()
+  activeSpeechAudio = null
+  if (activeSpeechObjectUrl) {
+    URL.revokeObjectURL(activeSpeechObjectUrl)
+    activeSpeechObjectUrl = ''
+  }
+  window.speechSynthesis?.cancel?.()
+}
+
+function readCheckedSubtitle(subtitle = {}) {
+  if (!shouldReadSubtitle(subtitle)) return
+
+  const key = subtitleSpeechKey(subtitle)
+  if (spokenSubtitleKeys.has(key)) return
+  spokenSubtitleKeys.add(key)
+
+  const text = collapseRepeatedText(subtitle.translated)
+  speechPlaybackQueue = speechPlaybackQueue
+    .catch(() => {})
+    .then(() => playCloudSpeech(text))
+}
+
+async function playCloudSpeech(text = '') {
+  if (!text || !settings.enableSpeechReadout) return
+  if (settings.speechVoiceStyle === 'system') {
+    playSystemSpeech(text)
+    return
+  }
+
+  try {
+    const response = await fetch(apiUrl('/api/tts'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        text,
+        voice: dashscopeSpeechVoices[settings.speechVoiceStyle] || dashscopeSpeechVoices.sweet
+      })
+    })
+    if (!response.ok) throw new Error(await response.text())
+    const audioBlob = await response.blob()
+    await playAudioBlob(audioBlob)
+  } catch (error) {
+    console.warn('DashScope TTS failed, falling back to system voice:', error)
+    playSystemSpeech(text)
+  }
+}
+
+function playAudioBlob(audioBlob) {
+  return new Promise((resolve, reject) => {
+    const objectUrl = URL.createObjectURL(audioBlob)
+    const audio = new Audio(objectUrl)
+    activeSpeechAudio = audio
+    activeSpeechObjectUrl = objectUrl
+    audio.onended = () => {
+      URL.revokeObjectURL(objectUrl)
+      if (activeSpeechAudio === audio) activeSpeechAudio = null
+      if (activeSpeechObjectUrl === objectUrl) activeSpeechObjectUrl = ''
+      resolve()
+    }
+    audio.onerror = () => {
+      URL.revokeObjectURL(objectUrl)
+      if (activeSpeechAudio === audio) activeSpeechAudio = null
+      if (activeSpeechObjectUrl === objectUrl) activeSpeechObjectUrl = ''
+      reject(new Error('语音播放失败'))
+    }
+    audio.play().catch(reject)
+  })
+}
+
+function playSystemSpeech(text = '') {
+  if (!text || !('speechSynthesis' in window)) return
+  const utterance = new SpeechSynthesisUtterance(text)
+  const lang = getSpeechLang()
+  const tone = getSpeechToneOptions()
+  utterance.lang = lang
+  utterance.voice = chooseSpeechVoice(lang)
+  utterance.rate = tone.rate
+  utterance.pitch = tone.pitch
+  utterance.volume = tone.volume
+  window.speechSynthesis.speak(utterance)
 }
 
 function serializeSubtitle(subtitle = {}) {
@@ -1681,6 +1925,7 @@ function applyCorrection(content) {
       subtitle.isCorrected = true
       subtitle.isPartial = false
       subtitle.correctionStatus = content.status || replacement.status || 'corrected'
+      readCheckedSubtitle(subtitle)
     }
     renderIndependentSubtitleWindow()
     return
@@ -1695,6 +1940,7 @@ function applyCorrection(content) {
       subtitle.isCorrected = true
       subtitle.isPartial = false
       subtitle.correctionStatus = content.status || 'corrected'
+      readCheckedSubtitle(subtitle)
       renderIndependentSubtitleWindow()
     }
     return
@@ -1706,6 +1952,8 @@ function applyCorrection(content) {
     subtitles.value[index].translated = translated
     subtitles.value[index].isCorrected = true
     subtitles.value[index].correctionStatus = 'corrected'
+    subtitles.value[index].isPartial = false
+    readCheckedSubtitle(subtitles.value[index])
   }
 }
 
@@ -1716,6 +1964,10 @@ function applyCorrectionStatus(content = {}) {
   subtitle.correctionStatus = content.status || ''
   subtitle.correctionReason = content.reason || ''
   if (content.status === 'corrected') subtitle.isCorrected = true
+  if (READABLE_CORRECTION_STATUSES.has(subtitle.correctionStatus)) {
+    subtitle.isPartial = false
+    readCheckedSubtitle(subtitle)
+  }
   renderIndependentSubtitleWindow()
 }
 
@@ -1873,6 +2125,8 @@ function exportSubtitles() {
 
 function clearSubtitles() {
   clearAllPendingPartialSubtitles()
+  spokenSubtitleKeys.clear()
+  cancelSpeechPlayback()
   subtitles.value = []
   subtitleCount.value = 0
   renderIndependentSubtitleWindow()
@@ -1941,6 +2195,7 @@ onUnmounted(() => {
   stopCapture()
   closeSubtitleWindow()
   clearAllPendingPartialSubtitles()
+  cancelSpeechPlayback()
   removeElectronSubtitleClosedListener?.()
   if (animationId) cancelAnimationFrame(animationId)
 })
@@ -2468,6 +2723,11 @@ body {
 .action-btn:hover:not(:disabled) { background: var(--surface-hover); color: var(--text-primary); }
 .action-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .action-btn svg { width: 16px; height: 16px; }
+.speech-toggle-btn.active {
+  border-color: rgba(99, 102, 241, 0.48);
+  background: rgba(99, 102, 241, 0.14);
+  color: var(--primary-light);
+}
 .subtitle-toggle-btn.active {
   border-color: rgba(34, 197, 94, 0.45);
   background: rgba(34, 197, 94, 0.12);
@@ -2805,6 +3065,35 @@ body {
 }
 
 .setting-group label { font-size: 13px; color: var(--text-primary); }
+
+.compact-setting-select {
+  width: 142px;
+  height: 34px;
+  padding: 0 30px 0 10px;
+  appearance: none;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  outline: none;
+  background:
+    linear-gradient(45deg, transparent 50%, var(--text-secondary) 50%) calc(100% - 15px) 14px / 6px 6px no-repeat,
+    linear-gradient(135deg, var(--text-secondary) 50%, transparent 50%) calc(100% - 10px) 14px / 6px 6px no-repeat,
+    rgba(255, 255, 255, 0.04);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.compact-setting-select:hover,
+.compact-setting-select:focus {
+  border-color: rgba(99, 102, 241, 0.72);
+  background-color: rgba(255, 255, 255, 0.07);
+}
+
+.compact-setting-select option {
+  color: #111827;
+  background: #ffffff;
+}
 
 .api-status {
   font-size: 12px;

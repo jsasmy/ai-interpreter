@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     DASHSCOPE_ASR_MODEL: str = "qwen3-asr-flash-realtime"
     DASHSCOPE_TEXT_MODEL: str = "qwen-flash"
     DASHSCOPE_REPAIR_MODEL: str = "qwen-plus-latest"
+    DASHSCOPE_TTS_URL: str = "wss://dashscope.aliyuncs.com/api-ws/v1/inference"
+    DASHSCOPE_TTS_MODEL: str = "cosyvoice-v2"
+    DASHSCOPE_TTS_VOICE: str = "longfeifei_v2"
     ENABLE_SECOND_E2E: bool = False
     LIVETRANSLATE_SILENCE_DURATION_MS: int = 480
     SECOND_E2E_SILENCE_DURATION_MS: int = 300
